@@ -4,32 +4,82 @@ import { http } from '../api/http'
 import { Avatar } from '../components/Avatar'
 
 
-type Tool = 'pen' | 'line' | 'rect' | 'circle' | 'eraser' | 'bucket'
+type Tool = 'pen' | 'line' | 'rect' | 'circle' | 'eraser' | 'bucket' | 'stamp'
 
 const PRESET_COLORS = ['#ffffff', '#f87171', '#fbbf24', '#34d399', '#60a5fa', '#a78bfa', '#f472b6', '#fef08a']
+
+// Logical canvas size (drawing coordinates). The element can scale visually.
+const CANVAS_WIDTH = 900
+const CANVAS_HEIGHT = 560
 
 export default function Drawing({ onSubmit }: { onSubmit: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement|null>(null)
   const containerRef = useRef<HTMLDivElement|null>(null)
+  const leftPanelRef = useRef<HTMLDivElement|null>(null)
+  const rightPanelRef = useRef<HTMLDivElement|null>(null)
   const ctxRef = useRef<CanvasRenderingContext2D|null>(null)
   const drawingRef = useRef(false)
   const startRef = useRef<{x:number;y:number}|null>(null)
   const snapshotRef = useRef<ImageData|null>(null)
   const historyRef = useRef<ImageData[]>([])
 
-  const { roomCode, sessionToken, players, drawingsVersion } = useRoomStore()
+  const { roomCode, sessionToken, players, drawingsVersion, timers } = useRoomStore()
 
   const [tool, setTool] = useState<Tool>('pen')
   const [color, setColor] = useState<string>('#ffffff')
   const [size, setSize] = useState<number>(8)
   const [fill, setFill] = useState<boolean>(false)
+  const [stamp, setStamp] = useState<string>('⭐️')
+  const [stampSize, setStampSize] = useState<number>(32)
 
   const [submitting, setSubmitting] = useState(false)
+  const [submitted, setSubmitted] = useState(false)
+  const [canvasBoxHeight, setCanvasBoxHeight] = useState<number>(CANVAS_HEIGHT)
+  // pan/zoom
+  const [zoom, setZoom] = useState<number>(1)
+  const [pan, setPan] = useState<{x:number;y:number}>({ x: 0, y: 0 })
+  const [panning, setPanning] = useState(false)
+  const spacePressedRef = useRef(false)
+  const lastMouseRef = useRef<{x:number;y:number}>({ x: 0, y: 0 })
   const [myPrompt, setMyPrompt] = useState<string>('')
   const [submittedIds, setSubmittedIds] = useState<Set<string>>(new Set())
+  const [secondsLeft, setSecondsLeft] = useState<number | null>(null)
 
-  const CANVAS_WIDTH = 800
-  const CANVAS_HEIGHT = 500
+  // —
+
+  // Start synchronized countdown based on serverTime and drawSeconds
+  useEffect(() => {
+    if (!timers.serverTime || !timers.drawSeconds) return
+    const now = Date.now()
+    const drift = now - timers.serverTime
+    const endAt = now + (timers.drawSeconds * 1000 - drift)
+
+    const tick = () => {
+      const remainMs = Math.max(0, endAt - Date.now())
+      setSecondsLeft(Math.ceil(remainMs / 1000))
+      if (remainMs <= 0) {
+        // Auto-advance to discussion only after draw window fully ends
+        // We rely on DISCUSS_STARTED if everyone submitted early; otherwise timer expiry switches locally
+        if (useRoomStore.getState().timers.voteStartTime) {
+          onSubmit()
+        }
+      }
+    }
+    tick()
+    const id = setInterval(tick, 250)
+    return () => clearInterval(id)
+  }, [timers.serverTime, timers.drawSeconds, onSubmit])
+
+  // If user refreshes mid-round, ensure we fetch current prompt and submissions immediately
+  useEffect(() => {
+    if (!roomCode || !sessionToken) return
+    // force-load prompt and submissions on mount
+    ;(async () => {
+      try { await http.get(`/api/rooms/${roomCode}/prompt`, { params: { token: sessionToken } }) } catch {}
+      try { const res = await http.get(`/api/rooms/${roomCode}/drawings`); setSubmittedIds(new Set((res.data as Array<{playerId:string}>).map(d=>d.playerId))) } catch {}
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const ensureContext = () => {
     const canvas = canvasRef.current!
@@ -153,8 +203,10 @@ export default function Drawing({ onSubmit }: { onSubmit: () => void }) {
 
   const getPos = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect()
-    const x = e.clientX - rect.left
-    const y = e.clientY - rect.top
+    // invert CSS transform (translate+scale)
+    const x = (e.clientX - rect.left - pan.x) / zoom
+    const y = (e.clientY - rect.top - pan.y) / zoom
+    lastMouseRef.current = { x, y }
     return { x, y }
   }
 
@@ -213,22 +265,42 @@ export default function Drawing({ onSubmit }: { onSubmit: () => void }) {
   }
 
   const onMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (spacePressedRef.current || e.button === 1) {
+      setPanning(true)
+      return
+    }
     const { x, y } = getPos(e)
     if (tool === 'bucket') {
       floodFill(x, y)
+      return
+    }
+    if (tool === 'stamp') {
+      const ctx = ensureContext()
+      ctx.save()
+      ctx.font = `${stampSize}px system-ui, Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(stamp, x, y)
+      ctx.restore()
+      saveHistory()
       return
     }
     beginStroke(x, y)
   }
 
   const onMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (panning) {
+      const rect = (e.target as HTMLCanvasElement).getBoundingClientRect()
+      setPan((p) => ({ x: p.x + e.movementX, y: p.y + e.movementY }))
+      return
+    }
     if (!drawingRef.current) return
     const { x, y } = getPos(e)
     drawStroke(x, y)
   }
 
-  const onMouseUp = () => endStroke()
-  const onMouseLeave = () => endStroke()
+  const onMouseUp = () => { endStroke(); setPanning(false) }
+  const onMouseLeave = () => { endStroke(); setPanning(false) }
 
   const undo = () => {
     const canvas = canvasRef.current
@@ -263,9 +335,11 @@ export default function Drawing({ onSubmit }: { onSubmit: () => void }) {
       form.append('file', blob, 'drawing.png')
       const url = `/api/rooms/${roomCode}/drawings?token=${encodeURIComponent(sessionToken)}`
       await http.post(url, form, { headers: { 'Content-Type': 'multipart/form-data' } })
+      // mark submitted locally
+      setSubmitted(true)
       // ensure voting state is reset for the discussion phase
       try { (useRoomStore.getState().setVoted as any)?.(false) } catch {}
-      onSubmit()
+      // Do not navigate here; wait for either DISCUSS_STARTED or draw timer expiry
     } finally {
       setSubmitting(false)
     }
@@ -288,6 +362,81 @@ export default function Drawing({ onSubmit }: { onSubmit: () => void }) {
     saveHistory()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Keep side panels equal to the rendered canvas height (responsive)
+  useEffect(() => {
+    const updateHeights = () => {
+      const c = canvasRef.current
+      const h = c ? c.getBoundingClientRect().height : CANVAS_HEIGHT
+      setCanvasBoxHeight(h)
+    }
+    updateHeights()
+    window.addEventListener('resize', updateHeights)
+    return () => window.removeEventListener('resize', updateHeights)
+  }, [])
+
+  // pan/zoom handlers
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space') spacePressedRef.current = true
+      if (e.key.toLowerCase() === 'i') {
+        // eyedropper at last mouse
+        const c = canvasRef.current
+        const ctx = ctxRef.current
+        if (!c || !ctx) return
+        const x = Math.floor(lastMouseRef.current.x)
+        const y = Math.floor(lastMouseRef.current.y)
+        if (x>=0 && y>=0 && x<c.width && y<c.height) {
+          const d = ctx.getImageData(x, y, 1, 1).data
+          const hex = `#${[d[0],d[1],d[2]].map(v=>v.toString(16).padStart(2,'0')).join('')}`
+          setColor(hex)
+        }
+      }
+    }
+    const onKeyUp = (e: KeyboardEvent) => { if (e.code === 'Space') spacePressedRef.current = false }
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    return () => { window.removeEventListener('keydown', onKeyDown); window.removeEventListener('keyup', onKeyUp) }
+  }, [])
+
+  const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+    if (!(e.ctrlKey || e.metaKey)) return
+    e.preventDefault()
+    const rect = (e.target as HTMLCanvasElement).getBoundingClientRect()
+    const point = { x: e.clientX - rect.left, y: e.clientY - rect.top }
+    const factor = e.deltaY < 0 ? 1.1 : 0.9
+    setZoom((z) => {
+      const newZ = Math.min(3, Math.max(0.5, z * factor))
+      // zoom towards pointer: adjust pan so the focus stays under the cursor
+      setPan((p) => ({ x: point.x - ((point.x - p.x) * (newZ / z)), y: point.y - ((point.y - p.y) * (newZ / z)) }))
+      return newZ
+    })
+  }
+
+  // touch pinch (basic)
+  const pinchRef = useRef<{dist:number; zoom:number; center:{x:number;y:number}}|null>(null)
+  const onTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (e.touches.length === 2) {
+      const [a,b] = [e.touches[0], e.touches[1]]
+      const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
+      pinchRef.current = { dist, zoom, center: { x:(a.clientX+b.clientX)/2, y:(a.clientY+b.clientY)/2 } }
+    }
+  }
+  const onTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (e.touches.length === 2 && pinchRef.current) {
+      const [a,b] = [e.touches[0], e.touches[1]]
+      const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
+      const factor = dist / pinchRef.current.dist
+      const rect = (e.target as HTMLCanvasElement).getBoundingClientRect()
+      const point = { x: pinchRef.current.center.x - rect.left, y: pinchRef.current.center.y - rect.top }
+      setZoom(() => {
+        const newZ = Math.min(3, Math.max(0.5, pinchRef.current!.zoom * factor))
+        setPan((p) => ({ x: point.x - ((point.x - p.x) * (newZ / pinchRef.current!.zoom)), y: point.y - ((point.y - p.y) * (newZ / pinchRef.current!.zoom)) }))
+        return newZ
+      })
+    }
+  }
+  const onTouchEnd = () => { pinchRef.current = null }
 
   // Fetch my prompt (per-player)
   useEffect(() => {
@@ -349,35 +498,43 @@ export default function Drawing({ onSubmit }: { onSubmit: () => void }) {
   return (
     <div ref={containerRef} style={{ maxWidth: 1200, margin: '1.5rem auto' }}>
       {/* Top: Prompt */}
-      <div style={{ marginBottom: 10, padding: '10px 12px', border: '1px solid #3a3a40', background: '#151517', borderRadius: 8 }}>
-        <strong>Prompt:</strong> <em>{myPrompt || '...'}</em>
+      <div style={{ marginBottom: 10, padding: '10px 12px', border: '1px solid #3a3a40', background: '#151517', borderRadius: 8, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+        <div><strong>Prompt:</strong> <em>{myPrompt || '...'}</em></div>
+        {secondsLeft !== null && (
+          <div style={{ position:'relative', width:56, height:56 }}>
+            <div style={{ position:'absolute', inset:0, borderRadius:999, background:`conic-gradient(#34d399 ${Math.max(0, Math.min(1, (secondsLeft || 0)/(timers.drawSeconds||1)))*360}deg, #2a2a2a 0deg)`, boxShadow:'0 4px 12px rgba(0,0,0,0.35)' }} />
+            <div style={{ position:'absolute', inset:6, borderRadius:999, background:'#0f0f10', display:'flex', alignItems:'center', justifyContent:'center', fontWeight:800 }}>
+              <span style={{ fontSize:16 }}>{secondsLeft}</span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Main grid: left players, center canvas, right tools */}
-      <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr 260px', gap: 12, alignItems: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(240px,300px) minmax(640px,1fr) minmax(240px,320px)', gap: 18, alignItems: 'start' }}>
         {/* Left: players and status */}
-        <div style={{ border: '1px solid #3a3a40', background:'#151517', padding: 10, borderRadius: 8 }}>
+        <div ref={leftPanelRef} style={{ border: '1px solid #3a3a40', background:'#151517', padding: 12, borderRadius: 12, minHeight: canvasBoxHeight, boxSizing:'border-box' }}>
           <div style={{ fontWeight: 600, marginBottom: 8 }}>Players</div>
           <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
             {players.map((p) => (
-              <li key={p.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 2px' }}>
-                <span style={{ display:'inline-flex', alignItems:'center', gap:8 }}>
+              <li key={p.id} style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', padding: '6px 4px' }}>
+                <span style={{ display:'inline-flex', alignItems:'center', gap:8, minWidth:0 }}>
                   <Avatar avatar={p.avatar} />
-                  {p.name}
+                  <span style={{ overflow:'hidden', textOverflow:'ellipsis' }}>{p.name}</span>
                 </span>
                 {submittedIds.has(p.id) ? (
-                  <span title="Submitted" style={{ color: '#34d399', display: 'inline-flex', alignItems: 'center', fontSize: 18 }}>✓</span>
+                  <span title="Submitted" style={{ color: '#34d399', display: 'inline-flex', alignItems: 'center', gap:6, fontSize: 12, padding:'2px 8px', border:'1px solid #1f3d2b', background:'#132a1e', borderRadius:999, whiteSpace:'nowrap' }}>Submitted ✓</span>
                 ) : (
-                  <span title="Pending" style={{ color: '#888', fontSize: 18 }}>•</span>
+                  <span title="Pending" style={{ color: '#888', fontSize: 12, padding:'2px 8px', border:'1px solid #2a2a2f', borderRadius:999, whiteSpace:'nowrap' }}>Pending</span>
                 )}
               </li>
             ))}
           </ul>
         </div>
 
-        {/* Center: canvas and submit button */}
+        {/* Center: canvas and submit button + tiny doodle hints */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-          <div style={{ border: '1px solid #3a3a40', background:'#111', padding: 8, borderRadius: 8 }}>
+          <div style={{ border: '1px solid #3a3a40', background:'#0f0f10', padding: 12, borderRadius: 14, boxShadow:'0 10px 26px rgba(0,0,0,0.35)', width:'100%', boxSizing:'border-box', overflow:'hidden' }}>
             <canvas
               ref={canvasRef}
               width={CANVAS_WIDTH}
@@ -386,16 +543,39 @@ export default function Drawing({ onSubmit }: { onSubmit: () => void }) {
               onMouseMove={onMouseMove}
               onMouseUp={onMouseUp}
               onMouseLeave={onMouseLeave}
-              style={{ border: '1px solid #666', background: '#222', cursor: cursorStyle as any }}
+              onWheel={onWheel}
+              onTouchStart={onTouchStart}
+              onTouchMove={onTouchMove}
+              onTouchEnd={onTouchEnd}
+              style={{ border: '1px solid #2a2a2f', background: '#1b1b1f', borderRadius:10, cursor: cursorStyle as any, width: '100%', height: 'auto', display:'block', transform:`translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin:'0 0' }}
             />
           </div>
-          <div style={{ marginTop: 12 }}>
-            <button onClick={upload} disabled={submitting}>Submit</button>
+          <div style={{ marginTop: 8, display:'flex', gap:12, alignItems:'center', justifyContent:'center', color:'#9ca3af' }}>
+            <span>Zoom: {(zoom*100)|0}%</span>
+            <button onClick={() => { setZoom(1); setPan({x:0,y:0}) }}>Reset view</button>
+          </div>
+          <div style={{ marginTop: 8, display:'flex', gap:8, alignItems:'center', justifyContent:'center' }}>
+            {submitted ? (
+              <button onClick={async () => {
+                if (!roomCode || !sessionToken) return
+                setSubmitting(true)
+                try {
+                  await http.delete(`/api/rooms/${roomCode}/drawings`, { params: { token: sessionToken } })
+                  setSubmitted(false)
+                } finally { setSubmitting(false) }
+              }} disabled={submitting}>
+                Edit
+              </button>
+            ) : (
+              <button className="btn-primary" onClick={upload} disabled={submitting}>{submitting ? 'Submitting…' : 'Submit'}</button>
+            )}
+            <button onClick={() => clearCanvas()}>Clear</button>
+            <span style={{ color:'#9ca3af', fontSize:12 }}>Pro tip: Try shapes + bucket for quick fills. Surprise the imposter!</span>
           </div>
         </div>
 
         {/* Right: tools */}
-        <div style={{ border: '1px solid #3a3a40', background:'#151517', padding: 10, borderRadius: 8, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div ref={rightPanelRef} style={{ border: '1px solid #3a3a40', background:'#151517', padding: 14, borderRadius: 12, display: 'flex', flexDirection: 'column', gap: 12, minHeight: canvasBoxHeight, boxSizing:'border-box' }}>
           <div>
             <div style={{ fontWeight: 600, marginBottom: 6 }}>Tools</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
@@ -417,6 +597,7 @@ export default function Drawing({ onSubmit }: { onSubmit: () => void }) {
               <button title="Bucket" onClick={() => setTool('bucket')} aria-pressed={tool==='bucket'} style={{ padding: 6, border: tool==='bucket'?'2px solid #fff':'1px solid #444', background:'#222', borderRadius: 6 }}>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l8 8-6 10H10L4 10z"/><path d="M14 14c0 1.1-.9 2-2 2s-2-.9-2-2"/></svg>
               </button>
+              <button title="Stamp" onClick={() => setTool('stamp')} aria-pressed={tool==='stamp'} style={{ padding: 6, border: tool==='stamp'?'2px solid #fff':'1px solid #444', background:'#222', borderRadius: 6 }}>★</button>
             </div>
           </div>
           <div>
@@ -433,6 +614,19 @@ export default function Drawing({ onSubmit }: { onSubmit: () => void }) {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
               {[4,8,12,16].map((s) => (
                 <button key={s} onClick={() => setSize(s)} style={{ padding: '6px 6px', border: size===s?'2px solid #fff':'1px solid #444', background:'#222', color:'#fff', borderRadius: 6 }}>{s}px</button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>Stamps</div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(5, 1fr)', gap:6 }}>
+              {['⭐️','👀','🎩','✨','😂'].map(s => (
+                <button key={s} onClick={() => { setStamp(s); setTool('stamp') }} aria-pressed={stamp===s} style={{ padding:6, border: stamp===s?'2px solid #fff':'1px solid #444', background:'#222', borderRadius:6 }}>{s}</button>
+              ))}
+            </div>
+            <div style={{ marginTop:6, display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:6 }}>
+              {[24,32,40,56].map(sz => (
+                <button key={sz} onClick={() => setStampSize(sz)} aria-pressed={stampSize===sz} style={{ padding:6, border: stampSize===sz?'2px solid #fff':'1px solid #444', background:'#222', borderRadius:6 }}>{sz}px</button>
               ))}
             </div>
           </div>

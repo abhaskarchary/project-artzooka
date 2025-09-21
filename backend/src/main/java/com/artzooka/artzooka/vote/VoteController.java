@@ -54,6 +54,30 @@ public class VoteController {
         v.setVoter(voter);
         v.setTarget(target);
         voteRepository.save(v);
+        System.out.println("[ARTZOOKA] Vote cast voter=" + voter.getName() + " -> target=" + target.getName());
+        // broadcast updated tally to everyone in room
+        Map<String, Long> counts = new java.util.HashMap<>();
+        for (Vote each : voteRepository.findByGame_Id(game.getId())) {
+            counts.merge(each.getTarget().getId().toString(), 1L, Long::sum);
+        }
+        Map<String, Object> evt = new java.util.LinkedHashMap<>();
+        evt.put("type", "VOTE_UPDATE");
+        evt.put("roomCode", roomOpt.get().getCode());
+        evt.put("gameId", game.getId());
+        evt.put("tally", counts);
+        // topic is /topic/rooms/{code}
+        messagingTemplate.convertAndSend("/topic/rooms/" + roomOpt.get().getCode(), evt);
+
+        // If all players have voted, auto-finish and broadcast SHOW_RESULTS
+        int votesCast = voteRepository.findByGame_Id(game.getId()).size();
+        int totalPlayers = (int) playerRepository.countByRoom_Id(roomOpt.get().getId());
+        if (totalPlayers > 0 && votesCast >= totalPlayers) {
+            Map<String, Object> show = new java.util.LinkedHashMap<>();
+            show.put("type", "SHOW_RESULTS");
+            show.put("roomCode", roomOpt.get().getCode());
+            show.put("gameId", game.getId());
+            messagingTemplate.convertAndSend("/topic/rooms/" + roomOpt.get().getCode(), show);
+        }
         return ResponseEntity.ok(Map.of("ok", true));
     }
 

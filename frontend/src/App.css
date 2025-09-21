@@ -6,7 +6,9 @@
 }
 
 html, body {
-  background: #0f0f10;
+  background: radial-gradient(1200px 600px at 10% -10%, #1a1a1f 0%, transparent 50%),
+              radial-gradient(1000px 600px at 110% 110%, #15151a 0%, transparent 50%),
+              #0f0f10;
   color: #e6e6e6;
 }
 
@@ -16,14 +18,103 @@ button {
   border: 1px solid #3a3a40;
   border-radius: 6px;
   padding: 6px 10px;
+  transition: transform 120ms ease, filter 120ms ease;
 }
 
 button:hover {
   filter: brightness(1.1);
+  transform: translateY(-1px);
 }
 
 button[aria-pressed="true"] {
   border-color: #ffffff;
+}
+
+/* Fancy title */
+.title-glow {
+  background: linear-gradient(90deg, #e6e6e6, #9ac5ff, #fcb0ff, #e6e6e6);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: hue 8s linear infinite;
+}
+
+/* Primary CTA */
+.btn-primary {
+  background: linear-gradient(90deg, #60a5fa, #a78bfa);
+  color: #0f0f10;
+  border: none;
+  font-weight: 700;
+  padding: 8px 14px;
+  box-shadow: 0 6px 18px rgba(96,165,250,0.25);
+}
+.btn-primary:hover { filter: brightness(1.08); transform: translateY(-1px); }
+.btn-pulse { animation: pulseGlow 1800ms ease-in-out infinite; }
+
+@keyframes pulseGlow {
+  0% { box-shadow: 0 6px 18px rgba(96,165,250,0.25); }
+  50% { box-shadow: 0 10px 24px rgba(167,139,250,0.35); }
+  100% { box-shadow: 0 6px 18px rgba(96,165,250,0.25); }
+}
+
+.btn-pulse-when-ready { animation: none; }
+.btn-pulse-when-ready.ready { animation: pulseGlow 1600ms ease-in-out infinite; }
+
+/* Glassy cards */
+.glass {
+  border: 1px solid #3a3a40;
+  background: linear-gradient(180deg, rgba(21,21,23,0.95), rgba(15,15,16,0.96));
+  border-radius: 12px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+}
+
+/* Inputs */
+.input {
+  background: #0f0f10;
+  color: #e6e6e6;
+  border: 1px solid #2f2f35;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.input:focus { outline: none; border-color: #60a5fa; box-shadow: 0 0 0 2px rgba(96,165,250,0.25); }
+
+/* Chips */
+.chip { border: 1px solid #2f2f35; background:#151517; color:#c9d1d9; border-radius:999px; padding:4px 10px; }
+
+/* Floating background orbs */
+.bg-orb { position:absolute; border-radius:999px; filter: blur(60px); opacity:0.35; pointer-events:none; }
+.float-a { animation: floatA 14s ease-in-out infinite alternate; }
+.float-b { animation: floatB 18s ease-in-out infinite alternate; }
+.float-c { animation: floatC 20s ease-in-out infinite alternate; }
+@keyframes floatA { from { transform: translate(0,0); } to { transform: translate(20px, -30px); } }
+@keyframes floatB { from { transform: translate(0,0); } to { transform: translate(-30px, 20px); } }
+@keyframes floatC { from { transform: translate(0,0); } to { transform: translate(25px, 25px); } }
+
+/* Modal */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.modal-card { border: 1px solid #3a3a40; background: #151517; border-radius: 12px; padding: 12px; width: 640px; max-width: calc(100% - 24px); box-shadow: 0 10px 24px rgba(0,0,0,0.35); }
+.tool-chip { border: 1px solid #2f2f35; background:#111114; color:#e6e6e6; border-radius:6px; padding:6px 8px; }
+
+/* Countdown animation */
+.countdown-num { animation: pop 700ms cubic-bezier(.2,.8,.2,1) both; display:inline-block; background: radial-gradient(closest-side,#60a5fa,#a78bfa); -webkit-background-clip: text; background-clip: text; color: transparent; text-shadow: 0 6px 18px rgba(96,165,250,0.35); }
+@keyframes pop { 0%{ transform: scale(0.6); opacity: 0; filter: blur(6px);} 70%{ transform: scale(1.25); opacity: 1; filter: blur(0);} 100%{ transform: scale(1); opacity:1; } }
+
+@keyframes hue {
+  0% { filter: hue-rotate(0deg); }
+  100% { filter: hue-rotate(360deg); }
+}
+
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+/* Pulsing ring used around avatar */
+.pulse-ring {
+  animation: pulse 1600ms ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0% { transform: scale(0.96); opacity: 0.55; }
+  50% { transform: scale(1); opacity: 0.9; }
+  100% { transform: scale(0.96); opacity: 0.55; }
 }
 
 .logo {

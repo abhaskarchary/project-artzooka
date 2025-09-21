@@ -1,0 +1,7 @@
+-- Add room settings for timers and capacity
+ALTER TABLE rooms
+  ADD COLUMN IF NOT EXISTS draw_seconds INTEGER NOT NULL DEFAULT 120,
+  ADD COLUMN IF NOT EXISTS vote_seconds INTEGER NOT NULL DEFAULT 60,
+  ADD COLUMN IF NOT EXISTS max_players INTEGER NOT NULL DEFAULT 8;
+
+

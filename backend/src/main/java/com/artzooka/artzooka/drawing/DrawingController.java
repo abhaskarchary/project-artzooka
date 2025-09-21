@@ -58,20 +58,59 @@ public class DrawingController {
         Path dest = absoluteDir.resolve(filename);
         Files.copy(file.getInputStream(), dest, StandardCopyOption.REPLACE_EXISTING);
 
-        if (!drawingRepository.existsByGame_IdAndPlayer_Id(game.getId(), player.getId())) {
-            Drawing d = new Drawing();
-            d.setGame(game);
-            d.setPlayer(player);
-            // store relative path under uploads root so URLs can be /static/{relative}
-            d.setFilePath(relativeDir.resolve(filename).toString());
-            drawingRepository.save(d);
+        Drawing existing = drawingRepository.findFirstByGame_IdAndPlayer_Id(game.getId(), player.getId());
+        if (existing == null) {
+            existing = new Drawing();
+            existing.setGame(game);
+            existing.setPlayer(player);
         }
+        // store relative path under uploads root so URLs can be /static/{relative}
+        existing.setFilePath(relativeDir.resolve(filename).toString());
+        drawingRepository.save(existing);
         // notify room subscribers to refresh gallery
         Map<String, Object> evt = Map.of(
             "type", "DRAWING_UPLOADED",
             "roomCode", code,
             "gameId", game.getId(),
             "playerId", player.getId()
+        );
+        messagingTemplate.convertAndSend("/topic/rooms/" + code, evt);
+        System.out.println("[ARTZOOKA] Drawing uploaded room=" + code + " player=" + player.getName());
+
+        // If all players submitted at least once, broadcast DISCUSS_STARTED to move everyone to voting
+        int submitted = (int) drawingRepository.countByGame_Id(game.getId());
+        int totalPlayers = (int) playerRepository.countByRoom_Id(roomOpt.get().getId());
+        if (totalPlayers > 0 && submitted >= totalPlayers) {
+            Map<String, Object> discuss = new java.util.LinkedHashMap<>();
+            discuss.put("type", "DISCUSS_STARTED");
+            discuss.put("roomCode", code);
+            discuss.put("serverTime", System.currentTimeMillis());
+            discuss.put("voteSeconds", 60);
+            messagingTemplate.convertAndSend("/topic/rooms/" + code, discuss);
+        }
+        return ResponseEntity.ok(Map.of("ok", true));
+    }
+
+    @DeleteMapping
+    @Transactional
+    public ResponseEntity<?> unsubmitDrawing(@PathVariable String code, @RequestParam("token") String token) {
+        var roomOpt = roomService.findByCode(code);
+        if (roomOpt.isEmpty()) return ResponseEntity.notFound().build();
+        var playerOpt = playerRepository.findBySessionToken(token);
+        if (playerOpt.isEmpty()) return ResponseEntity.status(401).body(Map.of("error", "Invalid token"));
+        Player player = playerOpt.get();
+        if (!player.getRoom().getId().equals(roomOpt.get().getId())) return ResponseEntity.status(403).body(Map.of("error", "Token not for this room"));
+        List<Game> games = gameRepository.findByRoomIdOrderByCreatedAtDesc(roomOpt.get().getId());
+        if (games.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error", "Game not started"));
+        Game game = games.get(0);
+
+        drawingRepository.deleteByGame_IdAndPlayer_Id(game.getId(), player.getId());
+
+        Map<String, Object> evt = Map.of(
+                "type", "DRAWING_UPLOADED",
+                "roomCode", code,
+                "gameId", game.getId(),
+                "playerId", player.getId()
         );
         messagingTemplate.convertAndSend("/topic/rooms/" + code, evt);
         return ResponseEntity.ok(Map.of("ok", true));

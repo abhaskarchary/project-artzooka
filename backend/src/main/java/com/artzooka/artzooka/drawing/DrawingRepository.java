@@ -8,4 +8,6 @@ public interface DrawingRepository extends JpaRepository<Drawing, UUID> {
     List<Drawing> findByGame_Id(UUID gameId);
     boolean existsByGame_IdAndPlayer_Id(UUID gameId, UUID playerId);
     long countByGame_Id(UUID gameId);
+    Drawing findFirstByGame_IdAndPlayer_Id(UUID gameId, UUID playerId);
+    void deleteByGame_IdAndPlayer_Id(UUID gameId, UUID playerId);
 }
