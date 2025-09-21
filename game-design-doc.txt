@@ -1,0 +1,59 @@
+## Overview
+
+Project Artzooka is code name for a game. Its a multiplayer game for artists, with standard room creation, join room features etc.
+The artists will be given a prompt to draw on a canvas, there will be an imposter among the artists, each will be given same prompt except the imposter, they will have a slightlly different prompt.
+After submitting each drawing, players will vote out among other players, if artists elimitate imposter, artists win, if imposter is able to convice artists that they are innocent, they win.
+
+## Techstack
+
+Backend: Java - Websocket
+Frontend: Javascript
+Build: Gradle
+
+## Gameplay
+Menu screen:
+    1. Play:
+        a. Create room - Admin will get a code that they can share with other players and they can join the game - there will be an eye button to display the code and a copy button tocopy it to clipboard.
+        b. Join room - Players can enter code to join someone else's game
+    2. Profile:
+        a. Character - Basic Character edit, change eye types, mouth head, etc, very basic profile creation - cartoon style
+        b. name - Players can add their name
+    3. Exit
+
+On create room or join room - players will be taken to a room page, where all player's profile and names will be listed.
+Admin will have option to start game.
+
+After start is clicked:
+All players will now see if they are imposter or not privately.
+
+On starting game each player will be shown a canvas.
+
+Canvas details:
+On the top the prompt will be displayed.
+on Left side each player's profile and name will be dispalyed, A green tick will be displayed if they submit the drawing, so that we can track other players progress.
+On right side there will be some basic drawing tools shapes and colors.
+On bottom there will be a submit button.
+
+After everyone has submitted drawing or time expires, players will be taken to discussion screen.
+
+Discussion screen details:
+All the drawing will be displayed in a grid form along with the player profile and names to identify who drew each drawing.
+Player will get a limited time to vote out a player.
+Player getting maximum votes will be marked as imposter.
+
+Depending on if Artists vote out the right imposter or not they will be taken to end screen
+
+End screen details:
+It will display if Artists won or imposter won.
+players will have option to leave room and goto menu or go back to room screen.
+
+## configurations
+Drawing Time - amount of time canvas is displayed
+Discussion time - amount of time for dicussion screen
+max participants - max room size
+
+## Testing
+Unit test for all java script and java code
+
+## Deployment
+This project will later be deployed in a remote machine

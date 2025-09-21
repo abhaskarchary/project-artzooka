@@ -1,0 +1,28 @@
+# General
+.DS_Store
+*.log
+uploads/
+*.iml
+
+# Env files
+.env
+.env.*
+frontend/.env
+frontend/.env.*
+backend/.env
+backend/.env.*
+
+# Backend (Gradle/Java)
+backend/.gradle/
+backend/build/
+backend/out/
+backend/.idea/
+backend/.settings/
+
+# Frontend (Node/Vite)
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.idea/
+
+

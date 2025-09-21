@@ -1,0 +1,1 @@
+rootProject.name = "artzooka-backend"
