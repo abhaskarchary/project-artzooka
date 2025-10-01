@@ -32,6 +32,9 @@ private OffsetDateTime createdAt = OffsetDateTime.now();
     @Column(name = "session_token", nullable = false, unique = true)
     private String sessionToken;
 
+    @Column(name = "active", nullable = false)
+    private boolean active = true;
+
 public UUID getId() { return id; }
 public Room getRoom() { return room; }
 public String getName() { return name; }
@@ -39,10 +42,12 @@ public boolean isAdmin() { return admin; }
 public String getAvatar() { return avatar; }
 public OffsetDateTime getCreatedAt() { return createdAt; }
     public String getSessionToken() { return sessionToken; }
+    public boolean isActive() { return active; }
 
 public void setRoom(Room room) { this.room = room; }
 public void setName(String name) { this.name = name; }
 public void setAdmin(boolean admin) { this.admin = admin; }
 public void setAvatar(String avatar) { this.avatar = avatar; }
     public void setSessionToken(String sessionToken) { this.sessionToken = sessionToken; }
+    public void setActive(boolean active) { this.active = active; }
 }

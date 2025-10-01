@@ -3,11 +3,22 @@ import { useRoomStore } from '../store/useRoomStore'
 import { http } from '../api/http'
 import { Avatar } from '../components/Avatar'
 import { fireConfetti, playChime } from '../utils/confetti'
+import { SessionManager, CanvasManager } from '../utils/sessionManager'
 
 export default function Results({ onExitToMenu, onBackToRoom }: { onExitToMenu: () => void, onBackToRoom: () => void }) {
-  const { roomCode, players } = useRoomStore()
+  const { roomCode, players, currentGameId } = useRoomStore()
   const [data, setData] = useState<any>(null)
   const [error, setError] = useState<string>('')
+
+  const handleExitToMenu = () => {
+    // Clear canvas data for completed game
+    if (currentGameId) {
+      CanvasManager.clearCanvas(currentGameId)
+    }
+    // Clear session data when exiting to menu
+    SessionManager.clear()
+    onExitToMenu()
+  }
 
   // fire celebratory effects once results are available
   useEffect(() => {
@@ -92,7 +103,7 @@ export default function Results({ onExitToMenu, onBackToRoom }: { onExitToMenu: 
           <div style={{ color:'#9ca3af', fontSize:12 }}>Share the room to play again.</div>
           <div style={{ display:'inline-flex', gap:8 }}>
             <button onClick={onBackToRoom}>Back to Room</button>
-            <button onClick={onExitToMenu}>Exit to Menu</button>
+            <button onClick={handleExitToMenu}>Exit to Menu</button>
             <button className="btn-primary" onClick={copyInvite}>Copy Room Link</button>
           </div>
         </div>

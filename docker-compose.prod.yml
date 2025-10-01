@@ -1,0 +1,55 @@
+# Production overrides for docker-compose.yml
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+version: '3.8'
+
+services:
+  postgres:
+    # Remove port exposure for security
+    ports: []
+    # Add restart policy
+    restart: unless-stopped
+    # Use stronger password in production
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_this_password}
+
+  backend:
+    # Remove direct port exposure (only accessible via frontend proxy)
+    ports: []
+    # Add restart policy
+    restart: unless-stopped
+    # Production environment variables
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/artzooka
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-change_this_password}
+      SERVER_PORT: 8080
+      # Production logging
+      LOGGING_LEVEL_ROOT: WARN
+      LOGGING_LEVEL_COM_ARTZOOKA: INFO
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  frontend:
+    # Add restart policy
+    restart: unless-stopped
+    # Expose standard HTTP/HTTPS ports
+    ports:
+      - "80:80"
+      - "443:80"  # Map HTTPS to HTTP (add SSL termination if needed)
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.2'
+        reservations:
+          memory: 64M
+          cpus: '0.1'

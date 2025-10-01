@@ -29,6 +29,11 @@ return roomRepository.save(room);
         return roomRepository.findByCode(code);
     }
 
+    @Transactional
+    public Room save(Room room) {
+        return roomRepository.save(room);
+    }
+
 private String generateUniqueCode(int length) {
 String code;
 do {

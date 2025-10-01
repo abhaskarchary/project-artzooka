@@ -23,7 +23,8 @@ export default function Drawing({ onSubmit }: { onSubmit: () => void }) {
   const snapshotRef = useRef<ImageData|null>(null)
   const historyRef = useRef<ImageData[]>([])
 
-  const { roomCode, sessionToken, players, drawingsVersion, timers } = useRoomStore()
+  const { roomCode, sessionToken, players, drawingsVersion, timers, view, setView, setPromptCommon, activeGameStatus, activeGamePlayers, notifications, removeNotification, clearNotifications } = useRoomStore()
+  
 
   const [tool, setTool] = useState<Tool>('pen')
   const [color, setColor] = useState<string>('#ffffff')
@@ -34,6 +35,7 @@ export default function Drawing({ onSubmit }: { onSubmit: () => void }) {
 
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
+  const timerExpiredRef = useRef(false) // Prevent multiple timer expirations
   const [canvasBoxHeight, setCanvasBoxHeight] = useState<number>(CANVAS_HEIGHT)
   // pan/zoom
   const [zoom, setZoom] = useState<number>(1)
@@ -47,22 +49,64 @@ export default function Drawing({ onSubmit }: { onSubmit: () => void }) {
 
   // —
 
+  // Check submission status when component mounts or game changes
+  useEffect(() => {
+    if (roomCode && sessionToken) {
+      checkSubmissionStatus()
+    }
+  }, [roomCode, sessionToken])
+
+  // Reset timer expired flag when timers change (new game starts)
+  useEffect(() => {
+    timerExpiredRef.current = false
+  }, [timers.serverTime, timers.drawSeconds])
+
   // Start synchronized countdown based on serverTime and drawSeconds
   useEffect(() => {
     if (!timers.serverTime || !timers.drawSeconds) return
     const now = Date.now()
     const drift = now - timers.serverTime
     const endAt = now + (timers.drawSeconds * 1000 - drift)
+    let hasExpired = false
 
     const tick = () => {
       const remainMs = Math.max(0, endAt - Date.now())
       setSecondsLeft(Math.ceil(remainMs / 1000))
-      if (remainMs <= 0) {
-        // Auto-advance to discussion only after draw window fully ends
-        // We rely on DISCUSS_STARTED if everyone submitted early; otherwise timer expiry switches locally
-        if (useRoomStore.getState().timers.voteStartTime) {
-          onSubmit()
+      
+      if (remainMs <= 0 && !hasExpired && !timerExpiredRef.current) {
+        hasExpired = true // Prevent multiple calls from this timer instance
+        timerExpiredRef.current = true // Prevent multiple calls from all timer instances
+        
+        // Auto-submit user's canvas content when timer expires
+        const currentState = useRoomStore.getState()
+        console.log('⏰ Drawing timer expired - remainMs:', remainMs, 'voteStartTime:', !!currentState.timers.voteStartTime, 'currentView:', currentState.view)
+        
+        if (currentState.timers.voteStartTime && currentState.view === 'draw') {
+          console.log('⏰ Drawing timer expired - auto-submitting user\'s canvas')
+          console.log('⏰ Current submission state - submitting:', submitting, 'submitted:', submitted)
+          
+          // Only attempt upload if not already submitting or submitted
+          if (!submitting && !submitted) {
+            console.log('⏰ Timer expired - attempting upload (backend will block if already submitted)')
+            upload().then(() => {
+              console.log('⏰ Auto-submit completed - calling onSubmit to switch to discuss')
+              onSubmit()
+            }).catch((error) => {
+              console.error('⏰ Auto-submit failed:', error)
+              // Still switch to discuss even if auto-submit fails
+              onSubmit()
+            })
+          } else {
+            console.log('⏰ Timer expired but already submitting/submitted - just calling onSubmit')
+            onSubmit()
+          }
+        } else if (currentState.timers.voteStartTime && currentState.view !== 'draw') {
+          console.log('⏰ Drawing timer expired but view already changed to:', currentState.view, '- not calling onSubmit')
+        } else if (!currentState.timers.voteStartTime) {
+          console.log('⏰ Drawing timer expired but no voteStartTime set yet')
         }
+      } else if (remainMs <= 0 && timerExpiredRef.current) {
+        console.log('⏰ Timer expired but already handled by another timer instance - ignoring')
       }
     }
     tick()
@@ -323,27 +367,143 @@ export default function Drawing({ onSubmit }: { onSubmit: () => void }) {
 
   const savePngBlob = async (): Promise<Blob> => {
     const canvas = canvasRef.current!
-    return await new Promise((res) => canvas.toBlob((b) => res(b!), 'image/png'))
+    console.log('🎨 Canvas dimensions:', canvas.width, 'x', canvas.height)
+    console.log('🎨 Canvas style dimensions:', canvas.style.width, 'x', canvas.style.height)
+    
+    // Get canvas context and check if there's any content
+    const ctx = canvas.getContext('2d')!
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    const hasContent = imageData.data.some((_value, index) => {
+      // Check if any pixel is not the default dark background (#222222)
+      if (index % 4 === 3) return false // Skip alpha channel
+      const pixelIndex = Math.floor(index / 4)
+      const r = imageData.data[pixelIndex * 4]
+      const g = imageData.data[pixelIndex * 4 + 1]
+      const b = imageData.data[pixelIndex * 4 + 2]
+      // Check if pixel is different from dark background (#222222 = 34, 34, 34)
+      return r !== 34 || g !== 34 || b !== 34
+    })
+    console.log('🎨 Canvas has drawing content:', hasContent)
+    
+    return await new Promise((res) => {
+      canvas.toBlob((blob) => {
+        console.log('🎨 Blob created, size:', blob?.size, 'bytes')
+        res(blob!)
+      }, 'image/png')
+    })
+  }
+
+  const checkSubmissionStatus = async () => {
+    if (!roomCode || !sessionToken) return false
+    try {
+      const response = await http.get(`/api/rooms/${roomCode}/drawings/status?token=${encodeURIComponent(sessionToken)}`)
+      const hasSubmitted = response.data.hasSubmitted
+      setSubmitted(hasSubmitted)
+      return hasSubmitted
+    } catch (error) {
+      console.error('Failed to check submission status:', error)
+      return false
+    }
   }
 
   const upload = async () => {
     if (!roomCode || !sessionToken) return
+    
+    // Enhanced protection - check if already submitted or currently submitting
+    if (submitting) {
+      console.log('⏰ Upload blocked - already submitting')
+      return
+    }
+    
+    if (submitted) {
+      console.log('⏰ Upload blocked - already submitted')
+      return
+    }
+    
+    console.log('🚀 Upload starting - setting submitting to true')
     setSubmitting(true)
+    
+    // Double-check after setting submitting flag (race condition protection)
+    if (submitted) {
+      console.log('⏰ Upload blocked - submitted flag changed during setup')
+      setSubmitting(false)
+      return
+    }
+    
     try {
+      console.log('🚀 Starting upload process...')
       const blob = await savePngBlob()
+      console.log('🚀 Blob obtained, creating FormData...')
       const form = new FormData()
       form.append('file', blob, 'drawing.png')
       const url = `/api/rooms/${roomCode}/drawings?token=${encodeURIComponent(sessionToken)}`
+      console.log('🚀 Posting to:', url)
+      
       await http.post(url, form, { headers: { 'Content-Type': 'multipart/form-data' } })
-      // mark submitted locally
+      console.log('🚀 Upload successful!')
+      
+      // Mark as submitted
       setSubmitted(true)
+      
       // ensure voting state is reset for the discussion phase
       try { (useRoomStore.getState().setVoted as any)?.(false) } catch {}
       // Do not navigate here; wait for either DISCUSS_STARTED or draw timer expiry
+    } catch (error: any) {
+      console.error('🚀 Upload failed:', error)
+      
+      // Check if it's a duplicate submission error
+      if (error.response?.data?.alreadySubmitted) {
+        console.log('🚀 Backend says already submitted - updating local state')
+        setSubmitted(true)
+      } else {
+        // For other errors, allow retry
+        throw error
+      }
     } finally {
       setSubmitting(false)
     }
   }
+
+  const leaveGame = async () => {
+    if (!roomCode || !sessionToken) return
+    
+    try {
+      const response = await fetch(`http://localhost:8080/api/rooms/${roomCode}/leave-game?token=${sessionToken}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      })
+      
+      if (response.ok) {
+        // Clear the prompt to prevent auto-redirect back to draw
+        setPromptCommon(undefined)
+        // Navigate back to lobby
+        setView('lobby')
+      } else {
+        console.error('Failed to leave game:', response.status)
+      }
+    } catch (error) {
+      console.error('Error leaving game:', error)
+    }
+  }
+
+  // Auto-dismiss notifications after 4 seconds
+  useEffect(() => {
+    notifications.forEach(notification => {
+      const timeElapsed = Date.now() - notification.timestamp
+      const timeRemaining = 4000 - timeElapsed
+      
+      if (timeRemaining > 0) {
+        setTimeout(() => {
+          removeNotification(notification.id)
+        }, timeRemaining)
+      } else {
+        // Already expired, remove immediately
+        removeNotification(notification.id)
+      }
+    })
+  }, [notifications, removeNotification])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -355,6 +515,7 @@ export default function Drawing({ onSubmit }: { onSubmit: () => void }) {
     canvas.style.height = `${CANVAS_HEIGHT}px`
 
     const ctx = ensureContext()
+    
     // draw dark background as default
     ctx.fillStyle = '#222222'
     ctx.fillRect(0, 0, canvas.width, canvas.height)
@@ -514,21 +675,113 @@ export default function Drawing({ onSubmit }: { onSubmit: () => void }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(240px,300px) minmax(640px,1fr) minmax(240px,320px)', gap: 18, alignItems: 'start' }}>
         {/* Left: players and status */}
         <div ref={leftPanelRef} style={{ border: '1px solid #3a3a40', background:'#151517', padding: 12, borderRadius: 12, minHeight: canvasBoxHeight, boxSizing:'border-box' }}>
-          <div style={{ fontWeight: 600, marginBottom: 8 }}>Players</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <div style={{ fontWeight: 600 }}>Players</div>
+            <button
+              onClick={leaveGame}
+              style={{
+                background: '#dc3545',
+                color: 'white',
+                border: 'none',
+                borderRadius: 6,
+                padding: '4px 8px',
+                fontSize: 12,
+                cursor: 'pointer'
+              }}
+            >
+              Leave Game
+            </button>
+          </div>
+          
+          {/* Show notifications */}
+          {notifications.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              {notifications.map((notification) => (
+                <div
+                  key={notification.id}
+                  style={{
+                    background: '#ffc107',
+                    color: '#000',
+                    padding: '6px 8px',
+                    borderRadius: 4,
+                    fontSize: 12,
+                    marginBottom: 4,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    animation: 'slideIn 0.3s ease-out'
+                  }}
+                >
+                  <span>{notification.message}</span>
+                  <button
+                    onClick={() => removeNotification(notification.id)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#000',
+                      cursor: 'pointer',
+                      fontSize: 14,
+                      marginLeft: 8,
+                      padding: 0
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              {notifications.length > 1 && (
+                <button
+                  onClick={clearNotifications}
+                  style={{
+                    background: 'transparent',
+                    color: '#888',
+                    border: '1px solid #444',
+                    borderRadius: 4,
+                    padding: '2px 6px',
+                    fontSize: 10,
+                    cursor: 'pointer'
+                  }}
+                >
+                  Clear All
+                </button>
+              )}
+            </div>
+          )}
+          
           <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {players.map((p) => (
-              <li key={p.id} style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', padding: '6px 4px' }}>
-                <span style={{ display:'inline-flex', alignItems:'center', gap:8, minWidth:0 }}>
-                  <Avatar avatar={p.avatar} />
-                  <span style={{ overflow:'hidden', textOverflow:'ellipsis' }}>{p.name}</span>
-                </span>
+            {(() => {
+              const filteredPlayers = players.filter(p => {
+                // Debug each player filtering decision
+                const shouldShow = (() => {
+                  // If there's no active game, show all players
+                  if (!activeGameStatus) {
+                    return true
+                  }
+                  // If there's an active game but no activeGamePlayers array, fallback to showing all players
+                  if (!activeGamePlayers) {
+                    return true
+                  }
+                  // If there's an active game with participants (even if empty), only show active participants
+                  return activeGamePlayers.includes(p.id)
+                })()
+                return shouldShow
+              })
+              
+              
+              return filteredPlayers.map((p) => (
+                <li key={p.id} style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', padding: '6px 4px' }}>
+                  <span style={{ display:'inline-flex', alignItems:'center', gap:8, minWidth:0 }}>
+                    <Avatar avatar={p.avatar} />
+                    <span style={{ overflow:'hidden', textOverflow:'ellipsis' }}>{p.name}</span>
+                  </span>
                 {submittedIds.has(p.id) ? (
                   <span title="Submitted" style={{ color: '#34d399', display: 'inline-flex', alignItems: 'center', gap:6, fontSize: 12, padding:'2px 8px', border:'1px solid #1f3d2b', background:'#132a1e', borderRadius:999, whiteSpace:'nowrap' }}>Submitted ✓</span>
                 ) : (
                   <span title="Pending" style={{ color: '#888', fontSize: 12, padding:'2px 8px', border:'1px solid #2a2a2f', borderRadius:999, whiteSpace:'nowrap' }}>Pending</span>
                 )}
-              </li>
-            ))}
+                </li>
+              ))
+            })()}
           </ul>
         </div>
 
@@ -567,7 +820,7 @@ export default function Drawing({ onSubmit }: { onSubmit: () => void }) {
                 Edit
               </button>
             ) : (
-              <button className="btn-primary" onClick={upload} disabled={submitting}>{submitting ? 'Submitting…' : 'Submit'}</button>
+              <button className="btn-primary" onClick={upload} disabled={submitting || submitted}>{submitting ? 'Submitting…' : submitted ? 'Submitted' : 'Submit'}</button>
             )}
             <button onClick={() => clearCanvas()}>Clear</button>
             <span style={{ color:'#9ca3af', fontSize:12 }}>Pro tip: Try shapes + bucket for quick fills. Surprise the imposter!</span>

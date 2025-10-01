@@ -48,13 +48,13 @@ public class RoomFlowIT {
         Map<?,?> p1 = rest.postForObject(url("/api/rooms/"+code+"/join"), Map.of("name","A"), Map.class);
         Map<?,?> p2 = rest.postForObject(url("/api/rooms/"+code+"/join"), Map.of("name","B"), Map.class);
         Map<?,?> p3 = rest.postForObject(url("/api/rooms/"+code+"/join"), Map.of("name","C"), Map.class);
-        assertThat(p1).containsKeys("playerId","isAdmin");
-        assertThat(p2).containsKeys("playerId","isAdmin");
-        assertThat(p3).containsKeys("playerId","isAdmin");
+        assertThat(p1).containsKey("playerId").containsKey("isAdmin");
+        assertThat(p2).containsKey("playerId").containsKey("isAdmin");
+        assertThat(p3).containsKey("playerId").containsKey("isAdmin");
 
         Map<?,?> start = rest.postForObject(url("/api/rooms/"+code+"/start"), null, Map.class);
-        assertThat(start).containsKeys("gameId","roomId","promptCommon");
-        assertThat(start).doesNotContainKeys("imposterId","promptImposter");
+        assertThat(start).containsKey("gameId").containsKey("roomId").containsKey("promptCommon");
+        assertThat(start).doesNotContainKey("imposterId").doesNotContainKey("promptImposter");
     }
 
     private String url(String path) { return "http://localhost:"+port+path; }

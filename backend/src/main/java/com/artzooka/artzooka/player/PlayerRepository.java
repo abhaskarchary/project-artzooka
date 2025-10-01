@@ -9,4 +9,6 @@ public interface PlayerRepository extends JpaRepository<Player, UUID> {
 List<Player> findByRoom_Id(UUID roomId);
 long countByRoom_Id(UUID roomId);
 Optional<Player> findBySessionToken(String sessionToken);
+List<Player> findByRoom_IdAndActiveTrue(UUID roomId);
+long countByRoom_IdAndActiveTrue(UUID roomId);
 }

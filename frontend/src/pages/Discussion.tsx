@@ -7,7 +7,7 @@ import { fireConfetti, playChime } from '../utils/confetti'
 interface Item { playerId: string; filePath: string }
 
 export default function Discussion({ onFinishVoting }: { onFinishVoting: () => void }) {
-  const { roomCode, players, sessionToken, drawingsVersion, setVoted, voted, playerId, timers, voteTally } = useRoomStore()
+  const { roomCode, players, sessionToken, drawingsVersion, setVoted, voted, playerId, timers, voteTally, view, setView, setPromptCommon, activeGameStatus, activeGamePlayers, notifications, removeNotification, clearNotifications } = useRoomStore()
   const [items, setItems] = useState<Item[]>([])
   const isAdmin = useMemo(() => players.find(p => p.id === playerId)?.isAdmin ?? false, [players, playerId])
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null)
@@ -55,6 +55,30 @@ export default function Discussion({ onFinishVoting }: { onFinishVoting: () => v
     playChime()
   }
 
+  const leaveGame = async () => {
+    if (!roomCode || !sessionToken) return
+    
+    try {
+      const response = await fetch(`http://localhost:8080/api/rooms/${roomCode}/leave-game?token=${sessionToken}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      })
+      
+      if (response.ok) {
+        // Clear the prompt to prevent auto-redirect back to draw
+        setPromptCommon(undefined)
+        // Navigate back to lobby
+        setView('lobby')
+      } else {
+        console.error('Failed to leave game:', response.status)
+      }
+    } catch (error) {
+      console.error('Error leaving game:', error)
+    }
+  }
+
   const finish = async () => {
     if (!roomCode || !isAdmin) return
     await http.post(`/api/rooms/${roomCode}/votes/finish`)
@@ -86,6 +110,23 @@ export default function Discussion({ onFinishVoting }: { onFinishVoting: () => v
     return () => window.removeEventListener('artzooka:reaction', handler as EventListener)
   }, [])
 
+  // Auto-dismiss notifications after 4 seconds
+  useEffect(() => {
+    notifications.forEach(notification => {
+      const timeElapsed = Date.now() - notification.timestamp
+      const timeRemaining = 4000 - timeElapsed
+      
+      if (timeRemaining > 0) {
+        setTimeout(() => {
+          removeNotification(notification.id)
+        }, timeRemaining)
+      } else {
+        // Already expired, remove immediately
+        removeNotification(notification.id)
+      }
+    })
+  }, [notifications, removeNotification])
+
   const now = Date.now()
   const voteStart = (timers.voteStartTime ?? now)
   const endAt = voteStart + (timers.voteSeconds ?? 60) * 1000
@@ -95,6 +136,20 @@ export default function Discussion({ onFinishVoting }: { onFinishVoting: () => v
     <div style={{ maxWidth: 1200, margin: '2rem auto' }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
         <h3 style={{ margin:0, letterSpacing:0.2 }}>Discussion & Voting</h3>
+        <button
+          onClick={leaveGame}
+          style={{
+            background: '#dc3545',
+            color: 'white',
+            border: 'none',
+            borderRadius: 6,
+            padding: '8px 12px',
+            fontSize: 14,
+            cursor: 'pointer'
+          }}
+        >
+          Leave Game
+        </button>
         {secondsLeft !== null && (
           <div style={{ position:'relative', width:42, height:42 }}>
             <div style={{ position:'absolute', inset:0, borderRadius:999, background:`conic-gradient(#60a5fa ${pct*360}deg, #2a2a2a 0deg)` }} />
@@ -102,8 +157,71 @@ export default function Discussion({ onFinishVoting }: { onFinishVoting: () => v
           </div>
         )}
       </div>
+      
+      {/* Show notifications */}
+      {notifications.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          {notifications.map((notification) => (
+            <div
+              key={notification.id}
+              style={{
+                background: '#ffc107',
+                color: '#000',
+                padding: '8px 12px',
+                borderRadius: 6,
+                fontSize: 14,
+                marginBottom: 8,
+                display: 'inline-flex',
+                alignItems: 'center',
+                marginRight: 8,
+                animation: 'slideIn 0.3s ease-out'
+              }}
+            >
+              <span>{notification.message}</span>
+              <button
+                onClick={() => removeNotification(notification.id)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#000',
+                  cursor: 'pointer',
+                  fontSize: 16,
+                  marginLeft: 8,
+                  padding: 0
+                }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          {notifications.length > 1 && (
+            <button
+              onClick={clearNotifications}
+              style={{
+                background: 'transparent',
+                color: '#888',
+                border: '1px solid #444',
+                borderRadius: 4,
+                padding: '4px 8px',
+                fontSize: 12,
+                cursor: 'pointer'
+              }}
+            >
+              Clear All
+            </button>
+          )}
+        </div>
+      )}
+      
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 18 }}>
-        {items.map((it) => {
+        {items.filter(it => {
+          // If there's no active game, show all items
+          if (!activeGameStatus) return true
+          // If there's an active game but no activeGamePlayers array, fallback to showing all items
+          if (!activeGamePlayers) return true
+          // If there's an active game with participants (even if empty), only show items from active participants
+          return activeGamePlayers.includes(it.playerId)
+        }).map((it) => {
           const p = players.find(p => p.id === it.playerId)
           return (
             <div key={it.playerId} id={`card-${it.playerId}`} onMouseEnter={()=>setHoverId(it.playerId)} onMouseLeave={()=>setHoverId(null)} style={{ border: '1px solid #2f2f35', padding: 12, borderRadius: 14, background:'linear-gradient(180deg,#121214,#0f0f10)', position:'relative', transition:'transform 180ms ease, box-shadow 180ms ease', transform: hoverId===it.playerId?'translateY(-2px) scale(1.01)':'none', boxShadow: hoverId===it.playerId?'0 12px 24px rgba(0,0,0,0.35)':'0 8px 20px rgba(0,0,0,0.25)' }}>

@@ -5,6 +5,112 @@ A real-time social drawing game.
 Backend: Spring Boot (Java 17, Gradle, WebSocket/STOMP, JPA, Flyway, PostgreSQL).
 Frontend: React + Vite + TypeScript, Zustand, SockJS + @stomp/stompjs.
 
+## Quick Start with Docker Compose
+
+The easiest way to run Artzooka locally or in production is using Docker Compose:
+
+```bash
+# Clone the repository
+git clone https://github.com/abhaskarchary/project-artzooka.git
+cd project-artzooka
+
+# Option 1: Use the convenience script
+./start.sh
+
+# Option 2: Use Docker Compose directly
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop all services
+docker-compose down
+```
+
+The application will be available at:
+- **Frontend**: http://localhost (port 80)
+- **Backend API**: http://localhost:8080
+- **PostgreSQL**: localhost:5432
+
+### Docker Compose Services
+
+- **postgres**: PostgreSQL 16 database with persistent data
+- **backend**: Spring Boot application with health checks
+- **frontend**: React app served by Nginx with API/WebSocket proxy
+
+### Environment Variables
+
+You can customize the setup by creating a `.env` file:
+
+```env
+# Database
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=root
+POSTGRES_DB=artzooka
+
+# Backend
+SERVER_PORT=8080
+```
+
+### Production Deployment
+
+For production deployment, use the production override:
+
+```bash
+# Set a strong database password
+export POSTGRES_PASSWORD="your_secure_password_here"
+
+# Start with production configuration
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+The production configuration includes:
+- **Security**: Database not exposed externally, backend only accessible via frontend proxy
+- **Restart policies**: Services automatically restart on failure
+- **Resource limits**: Memory and CPU limits for better resource management
+- **Logging**: Reduced log verbosity for production
+
+Additional production considerations:
+
+1. **Use external database**: Comment out the postgres service and update `SPRING_DATASOURCE_URL`
+2. **Add SSL/TLS**: Configure Nginx with certificates or use a reverse proxy like Traefik
+3. **Scale services**: Use `docker-compose up --scale backend=3`
+4. **Persistent uploads**: Ensure the uploads volume is backed up
+5. **Monitoring**: Add health check endpoints and monitoring tools
+6. **Secrets management**: Use Docker secrets or external secret management
+
+### Smoke Test (Docker)
+
+Once the services are running, test the application:
+
+```bash
+# Check service health
+docker-compose ps
+
+# Test backend health endpoint
+curl -s http://localhost:8080/actuator/health | jq
+
+# Test full application flow
+ROOM=$(curl -s -X POST http://localhost/api/rooms | jq -r .code)
+for n in Alice Bob Charlie; do
+  curl -s -X POST http://localhost/api/rooms/$ROOM/join \
+    -H 'Content-Type: application/json' \
+    -d "{\"name\":\"$n\"}" | jq
+done
+curl -s -X POST http://localhost/api/rooms/$ROOM/start | jq
+```
+
+### Troubleshooting Docker Setup
+
+- **Services won't start**: Check `docker-compose logs` for errors
+- **Database connection issues**: Ensure PostgreSQL is healthy before backend starts
+- **Frontend can't reach backend**: Verify Nginx proxy configuration
+- **Port conflicts**: Change ports in docker-compose.yml if 80/8080/5432 are in use
+
+---
+
+## Manual Deployment (Alternative)
+
 This guide describes production deployment on AWS using one EC2 instance (app + web) and an Amazon RDS for PostgreSQL instance.
 
 ## Architecture

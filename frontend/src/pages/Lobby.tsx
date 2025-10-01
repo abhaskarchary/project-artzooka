@@ -4,13 +4,39 @@ import { http } from '../api/http'
 import { connectRoomTopic } from '../ws/roomSocket'
 import { Avatar } from '../components/Avatar'
 import { fireConfetti, playChime } from '../utils/confetti'
+import { SessionManager } from '../utils/sessionManager'
 
 export default function Lobby() {
-  const { roomCode, players, setPlayers, sessionToken, playerId, setView, drawSeconds, voteSeconds, setSettings } = useRoomStore()
+  const { roomCode, players, setPlayers, sessionToken, playerId, setView, drawSeconds, voteSeconds, setSettings, activeGameStatus, activeGameEndTime, activeGamePlayers, setActiveGameStatus } = useRoomStore()
   const [copyMsg, setCopyMsg] = useState<string>('')
+  const [currentTime, setCurrentTime] = useState(Date.now())
 
-  const canStart = useMemo(() => players.length >= 3, [players])
+  const canStart = useMemo(() => players.length >= 3 && !activeGameStatus, [players, activeGameStatus])
   const isAdmin = useMemo(() => players.find(p => p.id === playerId)?.isAdmin ?? false, [players, playerId])
+  
+  // Calculate remaining time for active game
+  const activeGameTimeRemaining = useMemo(() => {
+    if (!activeGameEndTime) return null
+    const remaining = Math.max(0, activeGameEndTime - currentTime)
+    return Math.ceil(remaining / 1000) // in seconds
+  }, [activeGameEndTime, currentTime])
+
+  // Update current time every second for countdown and check for expiration
+  useEffect(() => {
+    if (!activeGameEndTime) return
+    const interval = setInterval(() => {
+      const now = Date.now()
+      setCurrentTime(now)
+      
+      // Check if the active game timer has expired
+      if (now >= activeGameEndTime) {
+        console.log('Active game timer expired, clearing game status')
+        setActiveGameStatus(undefined, undefined, undefined)
+      }
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [activeGameEndTime, setActiveGameStatus])
+
 
   useEffect(() => {
     if (!roomCode) return
@@ -39,6 +65,8 @@ export default function Lobby() {
   const leave = async () => {
     if (!roomCode || !sessionToken) return
     await http.post(`/api/rooms/${roomCode}/leave`, null, { params: { token: sessionToken } })
+    // Clear session data when leaving room
+    SessionManager.clear()
     setView('menu')
   }
 
@@ -46,6 +74,7 @@ export default function Lobby() {
     if (!roomCode || !sessionToken) return
     await http.delete(`/api/rooms/${roomCode}/players/${kickPlayerId}`, { params: { token: sessionToken } })
   }
+
 
   const copyRoomCode = async () => {
     if (!roomCode) return
@@ -154,6 +183,43 @@ export default function Lobby() {
     <div style={{ maxWidth: 900, margin: '3rem auto', padding: '0 12px' }}>
       <h2 style={{ marginBottom: 8 }}>Room <span className="title-glow">{roomCode}</span></h2>
 
+      {/* Active game status */}
+      {activeGameStatus && (
+        <div style={{ 
+          background: 'linear-gradient(135deg, #1f2937 0%, #374151 100%)', 
+          border: '1px solid #4b5563', 
+          borderRadius: 12, 
+          padding: 16, 
+          marginBottom: 16,
+          textAlign: 'center'
+        }}>
+          <div style={{ fontSize: 18, fontWeight: 600, color: '#f59e0b', marginBottom: 8 }}>
+            🎮 Game in Progress
+          </div>
+          <div style={{ color: '#d1d5db', marginBottom: 8 }}>
+            Current phase: <span style={{ color: '#60a5fa', fontWeight: 500 }}>
+              {activeGameStatus === 'DRAWING' ? 'Drawing' : 
+               activeGameStatus === 'VOTING' ? 'Voting' : 'Results'}
+            </span>
+            {activeGamePlayers && activeGamePlayers.length > 0 && (
+              <span style={{ color: '#9ca3af', fontSize: 14, marginLeft: 8 }}>
+                ({activeGamePlayers.length} player{activeGamePlayers.length !== 1 ? 's' : ''} active)
+              </span>
+            )}
+          </div>
+          {activeGameTimeRemaining !== null && activeGameTimeRemaining > 0 && (
+            <div style={{ color: '#9ca3af', fontSize: 14 }}>
+              Estimated time remaining: <span style={{ color: '#34d399', fontWeight: 500 }}>
+                {Math.floor(activeGameTimeRemaining / 60)}:{(activeGameTimeRemaining % 60).toString().padStart(2, '0')}
+              </span>
+            </div>
+          )}
+          <div style={{ color: '#6b7280', fontSize: 12, marginTop: 8 }}>
+            You can join the next game once this one ends
+          </div>
+        </div>
+      )}
+
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16, flexWrap:'wrap', justifyContent:'space-between' }}>
         <div style={{ display:'inline-flex', gap:12, alignItems:'center' }}>
           <button onClick={copyRoomCode}>Copy code</button>
@@ -227,12 +293,21 @@ export default function Lobby() {
 
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 12, flexWrap:'wrap', justifyContent:'space-between' }}>
         {isAdmin ? (
-          <button onClick={start} disabled={!canStart} className={`btn-primary btn-pulse-when-ready ${canStart ? 'ready' : ''}`}>Start Game</button>
+          <button 
+            onClick={start} 
+            disabled={!canStart} 
+            className={`btn-primary btn-pulse-when-ready ${canStart ? 'ready' : ''}`}
+            title={activeGameStatus ? 'Cannot start - game already in progress' : !canStart ? 'Need at least 3 players' : 'Start the game'}
+          >
+            {activeGameStatus ? 'Game in Progress' : 'Start Game'}
+          </button>
         ) : (
-          <span style={{ color: '#9ca3af' }}>Waiting for host to start…</span>
+          <span style={{ color: '#9ca3af' }}>
+            {activeGameStatus ? 'Game in progress...' : 'Waiting for host to start…'}
+          </span>
         )}
         <div style={{ display:'inline-flex', gap:12, alignItems:'center' }}>
-          {!canStart && (
+          {!canStart && !activeGameStatus && (
             <span style={{ color: '#9ca3af' }}>Need at least 3 players</span>
           )}
           <button onClick={leave}>Back to Menu</button>

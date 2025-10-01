@@ -1,0 +1,37 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+game-design-doc.txt
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage
+
+# Build outputs (will be created during build)
+backend/build
+frontend/dist
+frontend/node_modules
+
+# Uploads (will be mounted as volume)
+backend/uploads

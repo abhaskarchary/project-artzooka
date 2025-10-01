@@ -2,6 +2,7 @@ package com.artzooka.artzooka.vote;
 
 import com.artzooka.artzooka.game.Game;
 import com.artzooka.artzooka.game.GameRepository;
+import com.artzooka.artzooka.game.GameParticipantRepository;
 import com.artzooka.artzooka.player.Player;
 import com.artzooka.artzooka.player.PlayerRepository;
 import com.artzooka.artzooka.room.RoomService;
@@ -19,13 +20,15 @@ public class VoteController {
     private final RoomService roomService;
     private final PlayerRepository playerRepository;
     private final GameRepository gameRepository;
+    private final GameParticipantRepository gameParticipantRepository;
     private final VoteRepository voteRepository;
     private final SimpMessagingTemplate messagingTemplate;
 
-    public VoteController(RoomService roomService, PlayerRepository playerRepository, GameRepository gameRepository, VoteRepository voteRepository, SimpMessagingTemplate messagingTemplate) {
+    public VoteController(RoomService roomService, PlayerRepository playerRepository, GameRepository gameRepository, GameParticipantRepository gameParticipantRepository, VoteRepository voteRepository, SimpMessagingTemplate messagingTemplate) {
         this.roomService = roomService;
         this.playerRepository = playerRepository;
         this.gameRepository = gameRepository;
+        this.gameParticipantRepository = gameParticipantRepository;
         this.voteRepository = voteRepository;
         this.messagingTemplate = messagingTemplate;
     }
@@ -68,10 +71,15 @@ public class VoteController {
         // topic is /topic/rooms/{code}
         messagingTemplate.convertAndSend("/topic/rooms/" + roomOpt.get().getCode(), evt);
 
-        // If all players have voted, auto-finish and broadcast SHOW_RESULTS
+        // If all active game participants have voted, auto-finish and broadcast SHOW_RESULTS
         int votesCast = voteRepository.findByGame_Id(game.getId()).size();
-        int totalPlayers = (int) playerRepository.countByRoom_Id(roomOpt.get().getId());
-        if (totalPlayers > 0 && votesCast >= totalPlayers) {
+        int totalActiveParticipants = (int) gameParticipantRepository.countByGame_IdAndActiveTrue(game.getId());
+        if (totalActiveParticipants > 0 && votesCast >= totalActiveParticipants) {
+            // Update room status to RESULTS
+            var room = roomOpt.get();
+            room.setStatus("RESULTS");
+            roomService.save(room);
+            
             Map<String, Object> show = new java.util.LinkedHashMap<>();
             show.put("type", "SHOW_RESULTS");
             show.put("roomCode", roomOpt.get().getCode());
@@ -131,6 +139,12 @@ public class VoteController {
         List<Game> games = gameRepository.findByRoomIdOrderByCreatedAtDesc(roomOpt.get().getId());
         if (games.isEmpty()) return ResponseEntity.badRequest().body(Map.of("error", "Game not started"));
         Game game = games.get(0);
+        
+        // Update room status to RESULTS
+        var room = roomOpt.get();
+        room.setStatus("RESULTS");
+        roomService.save(room);
+        
         Map<String, Object> evt = new LinkedHashMap<>();
         evt.put("type", "SHOW_RESULTS");
         evt.put("roomCode", code);

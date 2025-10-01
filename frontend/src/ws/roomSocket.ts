@@ -19,10 +19,43 @@ export function connectRoomTopic(roomCode: string) {
 			try {
 				const payload = JSON.parse(msg.body) as { type: string; [k: string]: any }
         log.info('WS message', payload.type, payload)
+        console.log('🔧 WebSocket handler called for:', payload.type)
         if (payload.type === 'PLAYER_JOINED') {
+          console.log('🔵 PLAYER_JOINED event:', {
+            newPlayerName: payload.playerName,
+            currentActiveGameStatus: useRoomStore.getState().activeGameStatus,
+            currentActiveGamePlayers: useRoomStore.getState().activeGamePlayers
+          })
 					fetch(`${url}/api/rooms/${roomCode}`)
 						.then((r) => r.json())
-            .then((state) => { useRoomStore.getState().setPlayers(state.players); useRoomStore.getState().setSettings({ drawSeconds: state.drawSeconds, voteSeconds: state.voteSeconds, maxPlayers: state.maxPlayers }) })
+            .then((state) => { 
+              console.log('🔵 PLAYER_JOINED - Room state fetched:', {
+                players: state.players?.map((p: any) => p.name),
+                activeGameParticipants: state.activeGameParticipants,
+                roomStatus: state.status
+              })
+              
+              const store = useRoomStore.getState()
+              store.setPlayers(state.players)
+              store.setSettings({ drawSeconds: state.drawSeconds, voteSeconds: state.voteSeconds, maxPlayers: state.maxPlayers })
+              
+              // If there's an active game, update activeGamePlayers with current participants
+              if (state.status === 'DRAWING' || state.status === 'VOTING' || state.status === 'RESULTS') {
+                if (state.activeGameParticipants && state.activeGameParticipants.length > 0) {
+                  console.log('🔵 PLAYER_JOINED - Updating activeGamePlayers:', state.activeGameParticipants)
+                  // Calculate estimated end time based on game status
+                  let estimatedEndTime: number | undefined
+                  if (state.status === 'DRAWING') {
+                    estimatedEndTime = Date.now() + (state.drawSeconds * 1000) + (state.voteSeconds * 1000)
+                  } else if (state.status === 'VOTING') {
+                    estimatedEndTime = Date.now() + (state.voteSeconds * 1000)
+                  } else if (state.status === 'RESULTS') {
+                    estimatedEndTime = Date.now() + (30 * 1000) // 30 seconds for results
+                  }
+                  store.setActiveGameStatus(state.status as 'DRAWING' | 'VOTING' | 'RESULTS', estimatedEndTime, state.activeGameParticipants)
+                }
+              }
+            })
           // soft join sound
           try {
             const ctx = new (window as any).AudioContext()
@@ -54,6 +87,13 @@ export function connectRoomTopic(roomCode: string) {
             g.gain.exponentialRampToValueAtTime(0.00001, ctx.currentTime + 0.2); o.stop(ctx.currentTime + 0.21)
           } catch {}
         }
+        if (payload.type === 'PLAYER_LEFT_GAME') {
+          // Player left the active game but is still in the room
+          // Remove them from active game players list
+          const store = useRoomStore.getState()
+          store.removeActiveGamePlayer(payload.playerId)
+          store.addNotification(`${payload.playerName} left the game`)
+        }
         if (payload.type === 'GAME_STARTED') {
           const now = Date.now()
           const delayMs = Math.max(0, payload.serverTime - now)
@@ -73,26 +113,50 @@ export function connectRoomTopic(roomCode: string) {
                 voteSeconds: payload.voteSeconds,
                 voteStartTime: payload.voteStartTime
               })
+              // Set active game status when game starts
+              const endTime = payload.voteStartTime + (payload.voteSeconds * 1000)
+              const activePlayerIds = payload.activeGameParticipants || s.players.map(p => p.id)
+              s.setActiveGameStatus('DRAWING', endTime, activePlayerIds)
             }, delayMs)
           } else {
-            useRoomStore.getState().setPromptCommon(payload.promptCommon)
-            useRoomStore.getState().setVoted(false)
-            useRoomStore.getState().setTimers({
+            const s = useRoomStore.getState()
+            s.setPromptCommon(payload.promptCommon)
+            s.setVoted(false)
+            s.setTimers({
               serverTime: payload.serverTime,
               drawSeconds: payload.drawSeconds,
               voteSeconds: payload.voteSeconds,
               voteStartTime: payload.voteStartTime
             })
+            // Set active game status when game starts (immediate)
+            const endTime = payload.voteStartTime + (payload.voteSeconds * 1000)
+            const activePlayerIds = payload.activeGameParticipants || s.players.map(p => p.id)
+            s.setActiveGameStatus('DRAWING', endTime, activePlayerIds)
           }
         }
 				if (payload.type === 'DISCUSS_STARTED') {
-					useRoomStore.getState().setView('discuss')
-					useRoomStore.getState().setTimers({
+					const s = useRoomStore.getState()
+					console.log('🗳️ DISCUSS_STARTED received - all players moving to discussion')
+					console.log('🗳️ Current view before transition:', s.view)
+					
+					// All players go to discussion when DISCUSS_STARTED is received
+					// Backend only sends this when all active participants have submitted
+					console.log('🗳️ ✅ Moving to discuss view')
+					// Clear promptCommon to prevent App.tsx auto-redirect back to draw
+					s.setPromptCommon(undefined)
+					s.setView('discuss')
+					console.log('🗳️ Successfully transitioned to discuss view')
+					
+					// Always update timers and game status for lobby display
+					s.setTimers({
 						serverTime: payload.serverTime,
 						voteSeconds: payload.voteSeconds,
 						// When DISCUSS_STARTED is sent, voting begins immediately
 						voteStartTime: payload.serverTime,
 					})
+					// Update active game status to VOTING
+					const endTime = payload.serverTime + (payload.voteSeconds * 1000)
+					s.setActiveGameStatus('VOTING', endTime, s.activeGamePlayers)
 				}
 				if (payload.type === 'VOTE_UPDATE') {
 					useRoomStore.getState().setVoteTally(payload.tally)
@@ -106,7 +170,37 @@ export function connectRoomTopic(roomCode: string) {
 					useRoomStore.getState().bumpDrawingsVersion()
 				}
 				if (payload.type === 'SHOW_RESULTS') {
-					useRoomStore.getState().setView('results')
+					const s = useRoomStore.getState()
+					console.log('🏆 SHOW_RESULTS received - checking if player is in active game')
+					console.log('🏆 Current playerId:', s.playerId)
+					console.log('🏆 activeGamePlayers:', s.activeGamePlayers)
+					
+					// Only change view if the current player is actively participating in the game
+					const isPlayerInActiveGame = s.activeGamePlayers && s.playerId && s.activeGamePlayers.includes(s.playerId)
+					console.log('🏆 isPlayerInActiveGame:', isPlayerInActiveGame)
+					
+					if (isPlayerInActiveGame) {
+						console.log('🏆 Player is in active game - switching to results view')
+						// Clear promptCommon to prevent App.tsx auto-redirect back to draw
+						s.setPromptCommon(undefined)
+						s.setView('results')
+					} else {
+						console.log('🏆 Player not in active game - staying in current view')
+					}
+					
+					// Always update active game status for lobby display
+					const endTime = Date.now() + (30 * 1000) // 30 seconds for results
+					s.setActiveGameStatus('RESULTS', endTime, s.activeGamePlayers)
+				}
+				if (payload.type === 'ROOM_RESET') {
+					// Game ended, clear active game status
+					console.log('🔄 ROOM_RESET received - clearing active game status')
+					useRoomStore.getState().setActiveGameStatus(undefined, undefined, undefined)
+				}
+				if (payload.type === 'GAME_ENDED') {
+					// Game ended automatically (all players left or timer expired)
+					console.log('🔚 GAME_ENDED received - clearing active game status, reason:', payload.reason)
+					useRoomStore.getState().setActiveGameStatus(undefined, undefined, undefined)
 				}
         if (payload.type === 'GAME_COUNTDOWN') {
           useRoomStore.getState().setCountdown(payload.startAt, payload.seconds)

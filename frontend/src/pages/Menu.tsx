@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useRef } from 'react'
 import { http } from '../api/http'
 import { useRoomStore } from '../store/useRoomStore'
+import { SessionManager } from '../utils/sessionManager'
 
 interface Avatar {
   color: string
@@ -76,13 +77,23 @@ export default function Menu({ onEnterLobby }: { onEnterLobby: () => void }) {
     overlay.innerHTML = '<div style="border:1px solid #3a3a40;background:#151517;padding:14px 18px;border-radius:10px;display:flex;align-items:center;gap:10px"><span class="spinner" style="width:16px;height:16px;border:2px solid #444;border-top-color:#9ac5ff;border-radius:999;display:inline-block;animation:spin 1s linear infinite"></span>Creating room…</div>'
     document.body.appendChild(overlay)
     try {
-      const resp = await http.post('/api/rooms')
-      const { code: roomCode, id } = resp.data
-      setRoom(roomCode, id)
-      const join = await http.post(`/api/rooms/${roomCode}/join`, { name: name || 'Player' })
-      setSelf(join.data.playerId, join.data.sessionToken)
-      await saveAvatar(join.data.sessionToken)
-      onEnterLobby()
+    const resp = await http.post('/api/rooms')
+    const { code: roomCode, id } = resp.data
+    setRoom(roomCode, id)
+    const join = await http.post(`/api/rooms/${roomCode}/join`, { name: name || 'Player' })
+    setSelf(join.data.playerId, join.data.sessionToken)
+    
+    // Save session data for room persistence
+    SessionManager.save({
+      roomCode,
+      roomId: id,
+      playerId: join.data.playerId,
+      sessionToken: join.data.sessionToken,
+      isAdmin: join.data.isAdmin || false
+    })
+    
+    await saveAvatar(join.data.sessionToken)
+    onEnterLobby()
     } catch (e: any) {
       console.error('createRoom error', e)
       setError(e?.response?.data?.error || 'Failed to create room')
@@ -115,12 +126,22 @@ export default function Menu({ onEnterLobby }: { onEnterLobby: () => void }) {
     document.body.appendChild(overlay)
     // verify room exists and fetch id
     try {
-      const state = await http.get(`/api/rooms/${roomCode}`)
-      setRoom(roomCode, state.data.id)
-      const join = await http.post(`/api/rooms/${roomCode}/join`, { name: name || 'Player' })
-      setSelf(join.data.playerId, join.data.sessionToken)
-      await saveAvatar(join.data.sessionToken)
-      onEnterLobby()
+    const state = await http.get(`/api/rooms/${roomCode}`)
+    setRoom(roomCode, state.data.id)
+    const join = await http.post(`/api/rooms/${roomCode}/join`, { name: name || 'Player' })
+    setSelf(join.data.playerId, join.data.sessionToken)
+    
+    // Save session data for room persistence
+    SessionManager.save({
+      roomCode,
+      roomId: state.data.id,
+      playerId: join.data.playerId,
+      sessionToken: join.data.sessionToken,
+      isAdmin: join.data.isAdmin || false
+    })
+    
+    await saveAvatar(join.data.sessionToken)
+    onEnterLobby()
     } catch (e: any) {
       setError(e?.response?.data?.error || 'Failed to join room')
     } finally {

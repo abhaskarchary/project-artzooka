@@ -6,6 +6,8 @@ import com.artzooka.artzooka.prompt.PromptPair;
 import com.artzooka.artzooka.prompt.PromptPairRepository;
 import com.artzooka.artzooka.game.Game;
 import com.artzooka.artzooka.game.GameRepository;
+import com.artzooka.artzooka.game.GameParticipant;
+import com.artzooka.artzooka.game.GameParticipantRepository;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
@@ -13,6 +15,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.security.SecureRandom;
 import java.util.*;
+import java.util.LinkedHashMap;
 
 @RestController
 @RequestMapping("/api/rooms")
@@ -21,14 +24,16 @@ public class RoomController {
     private final RoomService roomService;
     private final PlayerRepository playerRepository;
     private final GameRepository gameRepository;
+    private final GameParticipantRepository gameParticipantRepository;
     private final PromptPairRepository promptPairRepository;
     private final SimpMessagingTemplate messagingTemplate;
 private static final SecureRandom RANDOM = new SecureRandom();
 
-    public RoomController(RoomService roomService, PlayerRepository playerRepository, GameRepository gameRepository, PromptPairRepository promptPairRepository, SimpMessagingTemplate messagingTemplate) {
+    public RoomController(RoomService roomService, PlayerRepository playerRepository, GameRepository gameRepository, GameParticipantRepository gameParticipantRepository, PromptPairRepository promptPairRepository, SimpMessagingTemplate messagingTemplate) {
         this.roomService = roomService;
         this.playerRepository = playerRepository;
         this.gameRepository = gameRepository;
+        this.gameParticipantRepository = gameParticipantRepository;
         this.promptPairRepository = promptPairRepository;
         this.messagingTemplate = messagingTemplate;
     }
@@ -47,8 +52,8 @@ Optional<Room> roomOpt = roomService.findByCode(code);
 if (roomOpt.isEmpty()) return ResponseEntity.notFound().build();
 Room room = roomOpt.get();
 
-        // enforce capacity: max 8 players
-        long current = playerRepository.countByRoom_Id(room.getId());
+        // enforce capacity: max 8 active players
+        long current = playerRepository.countByRoom_IdAndActiveTrue(room.getId());
         if (current >= 8) {
             return ResponseEntity.badRequest().body(Map.of("error", "Room is full (max 8 players)"));
         }
@@ -89,7 +94,7 @@ playerRepository.save(player);
 Optional<Room> roomOpt = roomService.findByCode(code);
 if (roomOpt.isEmpty()) return ResponseEntity.notFound().build();
 Room room = roomOpt.get();
-        List<Player> players = playerRepository.findByRoom_Id(room.getId());
+        List<Player> players = playerRepository.findByRoom_IdAndActiveTrue(room.getId());
 if (players.size() < 3) return ResponseEntity.badRequest().body(Map.of("error", "Need at least 3 players"));
         // pre-start countdown (synced)
         long now = System.currentTimeMillis();
@@ -115,6 +120,18 @@ game.setPromptCommon(pair.getCommonPrompt());
 game.setPromptImposter(pair.getImposterPrompt());
 gameRepository.save(game);
 
+        // Create game participants for all active players
+        for (Player player : players) {
+            GameParticipant participant = new GameParticipant();
+            participant.setGame(game);
+            participant.setPlayer(player);
+            gameParticipantRepository.save(participant);
+        }
+
+        // Update room status to DRAWING
+        room.setStatus("DRAWING");
+        roomService.save(room);
+
         // broadcast game start to lobby without revealing imposter
         long serverTime = startAt + countdownSeconds * 1000L;
         int drawSeconds = room.getDrawSeconds();
@@ -129,6 +146,13 @@ gameRepository.save(game);
         startEvent.put("drawSeconds", drawSeconds);
         startEvent.put("voteSeconds", voteSeconds);
         startEvent.put("voteStartTime", voteStartTime);
+        
+        // Add active participants list
+        List<String> activeParticipantIds = players.stream()
+                .map(p -> p.getId().toString())
+                .toList();
+        startEvent.put("activeGameParticipants", activeParticipantIds);
+        
         messagingTemplate.convertAndSend("/topic/rooms/" + room.getCode(), startEvent);
 
         // do not expose imposterId or imposter prompt in this response
@@ -145,7 +169,7 @@ gameRepository.save(game);
         Optional<Room> roomOpt = roomService.findByCode(code);
         if (roomOpt.isEmpty()) return ResponseEntity.notFound().build();
         Room room = roomOpt.get();
-        List<Player> players = playerRepository.findByRoom_Id(room.getId());
+        List<Player> players = playerRepository.findByRoom_IdAndActiveTrue(room.getId());
         List<Map<String, Object>> playerDtos = new ArrayList<>();
         for (Player p : players) {
             java.util.Map<String, Object> dto = new java.util.LinkedHashMap<>();
@@ -155,15 +179,30 @@ gameRepository.save(game);
             dto.put("avatar", p.getAvatar());
             playerDtos.add(dto);
         }
-        return ResponseEntity.ok(Map.of(
-                "id", room.getId(),
-                "code", room.getCode(),
-                "status", room.getStatus(),
-                "players", playerDtos,
-                "drawSeconds", room.getDrawSeconds(),
-                "voteSeconds", room.getVoteSeconds(),
-                "maxPlayers", room.getMaxPlayers()
-        ));
+        // Get active game participants if there's an active game
+        List<String> activeGameParticipants = new ArrayList<>();
+        if (room.getStatus().equals("DRAWING") || room.getStatus().equals("VOTING") || room.getStatus().equals("RESULTS")) {
+            List<Game> games = gameRepository.findByRoomIdOrderByCreatedAtDesc(room.getId());
+            if (!games.isEmpty()) {
+                Game currentGame = games.get(0);
+                activeGameParticipants = gameParticipantRepository.findByGame_IdAndActiveTrue(currentGame.getId())
+                        .stream()
+                        .map(participant -> participant.getPlayer().getId().toString())
+                        .toList();
+            }
+        }
+        
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("id", room.getId());
+        response.put("code", room.getCode());
+        response.put("status", room.getStatus());
+        response.put("players", playerDtos);
+        response.put("drawSeconds", room.getDrawSeconds());
+        response.put("voteSeconds", room.getVoteSeconds());
+        response.put("maxPlayers", room.getMaxPlayers());
+        response.put("activeGameParticipants", activeGameParticipants);
+        
+        return ResponseEntity.ok(response);
     }
 
     @PostMapping("/{code}/settings")
@@ -212,11 +251,13 @@ gameRepository.save(game);
         if (!player.getRoom().getId().equals(roomOpt.get().getId())) return ResponseEntity.status(403).body(Map.of("error", "Token not for this room"));
 
         boolean wasAdmin = player.isAdmin();
-        playerRepository.delete(player);
+        // Use soft deletion instead of hard deletion
+        player.setActive(false);
+        playerRepository.save(player);
 
         // reassign admin if needed
         if (wasAdmin) {
-            var remaining = playerRepository.findByRoom_Id(roomOpt.get().getId());
+            var remaining = playerRepository.findByRoom_IdAndActiveTrue(roomOpt.get().getId());
             if (!remaining.isEmpty()) {
                 remaining.get(0).setAdmin(true);
                 playerRepository.save(remaining.get(0));
@@ -250,10 +291,12 @@ gameRepository.save(game);
         if (!target.getRoom().getId().equals(roomOpt.get().getId())) return ResponseEntity.status(400).body(Map.of("error", "Player not in this room"));
 
         boolean wasAdmin = target.isAdmin();
-        playerRepository.delete(target);
+        // Use soft deletion instead of hard deletion
+        target.setActive(false);
+        playerRepository.save(target);
 
         if (wasAdmin) {
-            var remaining = playerRepository.findByRoom_Id(roomOpt.get().getId());
+            var remaining = playerRepository.findByRoom_IdAndActiveTrue(roomOpt.get().getId());
             if (!remaining.isEmpty()) {
                 remaining.get(0).setAdmin(true);
                 playerRepository.save(remaining.get(0));
@@ -293,5 +336,96 @@ gameRepository.save(game);
                 "gameId", game.getId(),
                 "prompt", prompt
         ));
+    }
+
+    @PostMapping("/{code}/reset")
+    @Transactional
+    public ResponseEntity<?> resetRoom(@PathVariable String code, @RequestParam("token") String token) {
+        var roomOpt = roomService.findByCode(code);
+        if (roomOpt.isEmpty()) return ResponseEntity.notFound().build();
+        var adminOpt = playerRepository.findBySessionToken(token);
+        if (adminOpt.isEmpty()) return ResponseEntity.status(401).body(Map.of("error", "Invalid token"));
+        var admin = adminOpt.get();
+        if (!admin.isAdmin() || !admin.getRoom().getId().equals(roomOpt.get().getId())) {
+            return ResponseEntity.status(403).body(Map.of("error", "Only host can reset room"));
+        }
+
+        // Reset room status back to LOBBY
+        var room = roomOpt.get();
+        room.setStatus("LOBBY");
+        roomService.save(room);
+
+        // Broadcast room reset event
+        Map<String, Object> evt = Map.of(
+                "type", "ROOM_RESET",
+                "roomCode", code
+        );
+        messagingTemplate.convertAndSend("/topic/rooms/" + code, evt);
+        System.out.println("[ARTZOOKA] Room reset to lobby: " + code);
+        return ResponseEntity.ok(Map.of("ok", true));
+    }
+
+    @PostMapping("/{code}/leave-game")
+    @Transactional
+    public ResponseEntity<?> leaveGame(@PathVariable String code, @RequestParam("token") String token) {
+        System.out.println("[ARTZOOKA] /leave-game endpoint called - code=" + code + ", token=" + token);
+        var roomOpt = roomService.findByCode(code);
+        if (roomOpt.isEmpty()) return ResponseEntity.notFound().build();
+        var playerOpt = playerRepository.findBySessionToken(token);
+        if (playerOpt.isEmpty()) return ResponseEntity.status(401).body(Map.of("error", "Invalid token"));
+        Player player = playerOpt.get();
+        if (!player.getRoom().getId().equals(roomOpt.get().getId())) {
+            return ResponseEntity.status(403).body(Map.of("error", "Token not for this room"));
+        }
+
+        // Player leaves the active game but stays in the room
+        // This means they won't participate in the current game but can join the next one
+        
+        // Find the current active game for this room
+        List<Game> games = gameRepository.findByRoomIdOrderByCreatedAtDesc(roomOpt.get().getId());
+        if (!games.isEmpty()) {
+            Game currentGame = games.get(0);
+            
+            // Mark the player as inactive in the current game
+            GameParticipant participant = gameParticipantRepository.findByGame_IdAndPlayer_Id(currentGame.getId(), player.getId());
+            if (participant != null && participant.isActive()) {
+                participant.setActive(false);
+                participant.setLeftAt(java.time.OffsetDateTime.now());
+                gameParticipantRepository.save(participant);
+                
+                // Check if all participants have left the game
+                long activeParticipants = gameParticipantRepository.countByGame_IdAndActiveTrue(currentGame.getId());
+                if (activeParticipants == 0) {
+                    // All players have left the active game, end it
+                    System.out.println("[ARTZOOKA] All players left active game, ending game automatically");
+                    
+                    // Reset room status back to LOBBY
+                    var room = roomOpt.get();
+                    room.setStatus("LOBBY");
+                    roomService.save(room);
+                    
+                    // Broadcast that the game has ended
+                    Map<String, Object> gameEndedEvent = Map.of(
+                            "type", "GAME_ENDED",
+                            "roomCode", code,
+                            "reason", "All players left"
+                    );
+                    messagingTemplate.convertAndSend("/topic/rooms/" + code, gameEndedEvent);
+                }
+            }
+        }
+        
+        // Broadcast that player left the active game (not the room)
+        Map<String, Object> evt = Map.of(
+                "type", "PLAYER_LEFT_GAME",
+                "roomCode", code,
+                "playerId", player.getId().toString(),
+                "playerName", player.getName()
+        );
+        System.out.println("[ARTZOOKA] Sending PLAYER_LEFT_GAME WebSocket event: playerId=" + player.getId().toString() + ", playerName=" + player.getName());
+        messagingTemplate.convertAndSend("/topic/rooms/" + code, evt);
+        System.out.println("[ARTZOOKA] PLAYER_LEFT_GAME WebSocket event sent successfully");
+        System.out.println("[ARTZOOKA] Player left active game (but stayed in room): " + player.getName());
+        return ResponseEntity.ok(Map.of("ok", true));
     }
 }
