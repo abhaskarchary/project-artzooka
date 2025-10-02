@@ -1,0 +1,70 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  integration-tests:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Create .env file
+      run: |
+        echo "POSTGRES_PASSWORD=test_password_123" >> .env
+        echo "BASE_URL=http://localhost" >> .env
+        echo "API_BASE_URL=http://localhost:8080" >> .env
+
+    - name: Start Docker Compose services
+      run: |
+        docker-compose up -d --build
+        echo "Waiting for services to be ready..."
+        sleep 30
+
+    - name: Wait for services to be healthy
+      run: |
+        # Wait for backend health check
+        timeout 60 bash -c 'until curl -f http://localhost:8080/actuator/health; do sleep 2; done'
+        
+        # Wait for frontend to be accessible
+        timeout 60 bash -c 'until curl -f http://localhost; do sleep 2; done'
+        
+        echo "All services are ready!"
+
+    - name: Run integration tests
+      run: |
+        chmod +x ./test.sh
+        ./test.sh
+
+    - name: Upload test screenshots on failure
+      if: failure()
+      uses: actions/upload-artifact@v3
+      with:
+        name: test-screenshots
+        path: integrationTests/screenshot-*.png
+        retention-days: 7
+
+    - name: Upload test logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v3
+      with:
+        name: docker-logs
+        path: |
+          docker-compose logs > docker-logs.txt
+          docker-logs.txt
+        retention-days: 7
+
+    - name: Clean up
+      if: always()
+      run: |
+        docker-compose --profile testing down
+        docker-compose down
+        docker system prune -f

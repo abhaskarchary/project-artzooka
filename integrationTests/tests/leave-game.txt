@@ -1,0 +1,26 @@
+# Leave Game Test Cases
+
+SCENARIO: Player leaves during drawing phase
+GIVEN: 3 players are needed
+WHEN: Player1 creates a room
+AND: Player2 joins the room
+AND: Player3 joins the room
+AND: Player1 starts the game
+AND: Player2 leaves game
+AND: Player1 submits drawing
+AND: Player3 submits drawing
+THEN: Player1 and Player3 should be taken to Discussion Screen
+
+SCENARIO: Player leaves during voting phase
+GIVEN: 3 players are needed
+WHEN: Player1 creates a room
+AND: Player2 joins the room
+AND: Player3 joins the room
+AND: Player1 starts the game
+AND: Player1 submits drawing
+AND: Player2 submits drawing
+AND: Player3 submits drawing
+AND: Player2 leaves game
+AND: Player1 votes
+AND: Player3 votes
+THEN: Player1 and Player3 should see results screen

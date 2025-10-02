@@ -279,4 +279,87 @@ sudo systemctl reload nginx
 
 ---
 
+## Integration Testing
+
+Artzooka includes a comprehensive integration testing framework that tests the complete game flow using browser automation.
+
+### Quick Start
+
+```bash
+# Start the application
+docker-compose up -d
+
+# Run integration tests
+./test.sh
+
+# Run tests with visible browser (development)
+./test.sh dev
+
+# Clean up test containers
+./test.sh clean
+```
+
+### Test Framework Features
+
+- **Browser Automation**: Uses Playwright for real end-to-end testing
+- **Gherkin Syntax**: Tests written in plain text using Given/When/Then format
+- **Docker Integration**: Tests run in isolated containers
+- **Fast Execution**: Configurable short timers for quick test runs
+- **Visual Debugging**: Screenshots on test failures
+- **Parallel Execution**: Multiple browser contexts for multi-player scenarios
+
+### Writing Tests
+
+Tests are written in plain text using Gherkin syntax in the `integrationTests/tests/` directory:
+
+```gherkin
+SCENARIO: All Players submit drawing before timer expires
+GIVEN: 3 players are needed
+WHEN: Player1 creates a room
+AND: Player2 joins the room
+AND: Player3 joins the room
+AND: Player1 starts the game
+AND: Player1 submits drawing
+AND: Player2 submits drawing
+AND: Player3 submits drawing
+THEN: All players must be taken to Discussion Screen
+```
+
+### Available Actions
+
+- **Setup**: `3 players are needed`, `Player1 creates a room`
+- **Game Flow**: `joins room`, `starts game`, `submits drawing`, `votes`
+- **Timing**: `drawing timer expires`, `voting timer expires`
+- **Verification**: `taken to Discussion Screen`, `shown in voting screen`
+
+### Test Configuration
+
+The framework supports various configuration options:
+
+```bash
+# Run with custom timers
+npm test -- --draw-time 3 --vote-time 3
+
+# Run with slow motion for debugging
+npm test -- --headed --slow-mo 1000
+
+# Run specific test file
+npm test tests/draw-flow.txt
+```
+
+### CI/CD Integration
+
+Tests can be integrated into CI/CD pipelines:
+
+```yaml
+# GitHub Actions example
+- name: Run Integration Tests
+  run: |
+    docker-compose up -d
+    ./test.sh
+    docker-compose down
+```
+
+---
+
 Repo: https://github.com/abhaskarchary/project-artzooka.git

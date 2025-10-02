@@ -57,6 +57,24 @@ services:
     networks:
       - artzooka-network
 
+  # Integration Tests
+  integration-tests:
+    build:
+      context: ./integrationTests
+      dockerfile: Dockerfile
+    environment:
+      BASE_URL: http://frontend
+      API_BASE_URL: http://backend:8080
+    depends_on:
+      frontend:
+        condition: service_started
+      backend:
+        condition: service_healthy
+    networks:
+      - artzooka-network
+    profiles:
+      - testing
+
 volumes:
   postgres-data:
   uploads-data:

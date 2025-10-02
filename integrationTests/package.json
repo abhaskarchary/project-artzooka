@@ -1,0 +1,21 @@
+{
+  "name": "artzooka-integration-tests",
+  "version": "1.0.0",
+  "description": "Integration testing framework for ConArtist game",
+  "main": "index.js",
+  "scripts": {
+    "test": "node src/runner.js",
+    "test:watch": "node src/runner.js --watch",
+    "test:debug": "node --inspect src/runner.js",
+    "install-browsers": "npx playwright install"
+  },
+  "dependencies": {
+    "@playwright/test": "^1.40.0",
+    "axios": "^1.6.0",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0"
+  },
+  "type": "module"
+}

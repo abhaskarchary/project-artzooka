@@ -1,0 +1,15 @@
+# Basic ConArtist Game Flow Test
+
+SCENARIO: Basic game flow with 3 players
+GIVEN: 3 players are needed
+WHEN: Player1 creates a room
+AND: Player2 joins the room
+AND: Player3 joins the room
+AND: Player1 starts the game
+AND: Player1 submits drawing
+AND: Player2 submits drawing
+AND: Player3 submits drawing
+AND: Player1 votes
+AND: Player2 votes
+AND: Player3 votes
+THEN: All players should see results screen

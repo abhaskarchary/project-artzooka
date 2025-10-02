@@ -1,0 +1,27 @@
+# Timer Expiration Test Cases
+
+SCENARIO: Drawing timer expires before all players submit
+GIVEN: 3 players are needed
+WHEN: Player1 creates a room
+AND: Player2 joins the room
+AND: Player3 joins the room
+AND: Player1 starts the game
+AND: Player1 submits drawing
+AND: drawing timer expires
+THEN: All players must be taken to Discussion Screen
+AND: Player1's drawing should be shown in voting screen
+AND: Player2's unfinished drawing should be shown in voting screen
+AND: Player3's blank drawing must be shown
+
+SCENARIO: Voting timer expires before all players vote
+GIVEN: 3 players are needed
+WHEN: Player1 creates a room
+AND: Player2 joins the room
+AND: Player3 joins the room
+AND: Player1 starts the game
+AND: Player1 submits drawing
+AND: Player2 submits drawing
+AND: Player3 submits drawing
+AND: Player1 votes
+AND: voting timer expires
+THEN: All players should see results screen
